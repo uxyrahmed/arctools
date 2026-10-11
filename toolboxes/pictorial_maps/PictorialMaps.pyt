@@ -656,18 +656,25 @@ def _apply_callout_symbology(layer, image_height_pt, requested_scale):
     """Give each callout a symbol with its picture at the end of the line,
     and make sure the map has a reference scale so the pictures keep their
     size relative to the map."""
-    rows = []
-    data_source = layer.dataSource
-    with arcpy.da.SearchCursor(data_source,
+    pictures = {}
+    with arcpy.da.SearchCursor(layer.dataSource,
                                [F_PHOTO_OID, F_NAME, F_IMAGE]) as cursor:
         for oid, name, image in cursor:
             if image and os.path.isfile(image):
-                rows.append((oid, name, image))
+                pictures[_value_key(oid)] = (name, image)
+
+    # Let ArcGIS Pro make the unique value classes from the values in the
+    # data, so every callout is sure to match its class, then give each class
+    # its picture.
+    symbology = layer.symbology
+    symbology.updateRenderer("UniqueValueRenderer")
+    symbology.renderer.fields = [F_PHOTO_OID]
+    layer.symbology = symbology
 
     definition = layer.getDefinition("V3")
-    definition.renderer = _callout_renderer(rows, image_height_pt)
+    _add_pictures(definition.renderer, pictures, image_height_pt)
     layer.setDefinition(definition)
-    _check_pictures_kept(layer, len(rows))
+    _check_pictures_kept(layer, len(pictures))
 
     m = _current_map()
     if m is not None:
@@ -737,32 +744,35 @@ def _symbol_reference(symbol_layers):
     return reference
 
 
-def _callout_renderer(rows, image_height_pt):
-    """One class per photo, each with its own picture. Callouts drawn by hand
-    (with no matching photo) get a plain leader line."""
-    classes = []
-    for oid, name, image_file in rows:
-        value = _cim("CIMUniqueValue")
-        value.fieldValues = [str(oid)]
-        cls = _cim("CIMUniqueValueClass")
-        cls.label = name or str(oid)
-        cls.values = [value]
-        cls.visible = True
-        cls.symbol = _symbol_reference(
-            [_picture_layer(image_file, image_height_pt)] + _leader_layers())
-        classes.append(cls)
+def _value_key(value):
+    """A photo OID as text, the same whether it comes from the field or from
+    a unique value class ("12", 12 and "12.0" all give "12")."""
+    try:
+        return str(int(float(value)))
+    except (TypeError, ValueError):
+        return str(value)
 
-    group = _cim("CIMUniqueValueGroup")
-    group.heading = F_PHOTO_OID
-    group.classes = classes
 
-    renderer = _cim("CIMUniqueValueRenderer")
-    renderer.fields = [F_PHOTO_OID]
-    renderer.groups = [group]
-    renderer.defaultLabel = "Other callouts"
+def _add_pictures(renderer, pictures, image_height_pt):
+    """Give each unique value class the picture of its photo. Callouts with
+    no picture (for example drawn by hand) get a plain leader line."""
+    for group in renderer.groups or []:
+        group.heading = "Photo"
+        for cls in group.classes or []:
+            key = _value_key(cls.values[0].fieldValues[0]) if cls.values \
+                else None
+            picture = pictures.get(key)
+            if picture is None:
+                cls.symbol = _symbol_reference(_leader_layers())
+                continue
+            name, image_file = picture
+            cls.label = name or key
+            cls.symbol = _symbol_reference(
+                [_picture_layer(image_file, image_height_pt)] +
+                _leader_layers())
+    renderer.defaultLabel = "Callouts without a picture"
     renderer.defaultSymbol = _symbol_reference(_leader_layers())
     renderer.useDefaultSymbol = True
-    return renderer
 
 
 def _check_pictures_kept(layer, expected):
