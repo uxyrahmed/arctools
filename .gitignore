@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# ArcGIS Pro project folders that are created automatically
+.backups/
+ImportLog/
+GpMessages/
+Index/
+
+# File geodatabase and data locks
+*.lock
+
+# Editors and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
