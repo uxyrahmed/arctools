@@ -5,6 +5,7 @@
 """
 
 import io
+import itertools
 import math
 import os
 import random
@@ -204,15 +205,16 @@ class TestEdges(unittest.TestCase, LayoutChecks):
         sizes = portrait_sizes(len(anchors), 5000, 60)
         self.check(anchors, sizes, extent)
 
-    def test_uses_inner_rows_only_when_the_edge_is_full(self):
+    def test_fills_the_inside_edge_before_going_outside(self):
         anchors = [(0.0, 0.0)] * 30
         sizes = [(10.0, 10.0)] * 30
         extent = (-45.0, -45.0, 45.0, 45.0)
-        centres = self.check(anchors, sizes, extent)
-        outer = next(cl.edge_slots(extent, (10.0, 10.0), 2.0))[1]
-        on_edge = sum(1 for c in centres if c in outer)
-        self.assertEqual(on_edge, len(outer))
-        self.assertLess(len(outer), 30)
+        centres = cl.arrange_images(anchors, sizes, cl.EDGES, gap=2.0,
+                                    extent=extent)
+        self.assert_good_layout(anchors, sizes, centres)
+        inside_ring = next(cl.edge_slots(extent, (10.0, 10.0), 2.0))[1]
+        self.assertEqual(len(inside_ring), 24)
+        self.assertEqual(sum(1 for c in centres if c in inside_ring), 24)
 
     def test_photos_near_one_side_get_images_on_that_side(self):
         anchors = [(90.0, float(y)) for y in range(0, 100, 20)]
@@ -228,17 +230,40 @@ class TestEdges(unittest.TestCase, LayoutChecks):
         sizes = [(7.5, 10.0) if i % 2 else (13.3, 10.0) for i in range(14)]
         self.check(anchors, sizes, (-120.0, -100.0, 120.0, 100.0))
 
-    def test_not_enough_room(self):
-        with self.assertRaises(cl.NotEnoughRoom) as caught:
-            cl.arrange_images([(0.0, 0.0)] * 10, [(10.0, 10.0)] * 10,
-                              cl.EDGES, extent=(-15.0, -15.0, 15.0, 15.0))
-        self.assertEqual(caught.exception.capacity, 4)
-        self.assertEqual(caught.exception.count, 10)
+    def test_overflow_goes_outside_the_map(self):
+        # Room for 4 inside; the other 6 go in a ring just outside.
+        extent = (-15.0, -15.0, 15.0, 15.0)
+        anchors = [(0.0, 0.0)] * 10
+        sizes = [(10.0, 10.0)] * 10
+        self.assertEqual(cl.inside_edge_room(extent, sizes, 2.0), 4)
+        centres = cl.arrange_images(anchors, sizes, cl.EDGES, gap=2.0,
+                                    extent=extent)
+        self.assertFalse(cl.images_overlap(centres, sizes))
+        self.assertEqual(self.count_crossings(anchors, centres), 0)
+        inside_count = sum(1 for c in centres
+                           if inside(extent, c, (10.0, 10.0)))
+        self.assertEqual(inside_count, 4)
+        for x, y in centres:
+            self.assertLess(max(abs(x), abs(y)), 15.0 + 2.0 + 10.0)
 
     def test_extent_smaller_than_one_image(self):
-        with self.assertRaises(cl.NotEnoughRoom):
-            cl.arrange_images([(0.0, 0.0)], [(10.0, 10.0)], cl.EDGES,
-                              extent=(0.0, 0.0, 5.0, 5.0))
+        sizes = [(10.0, 10.0)] * 3
+        self.assertEqual(cl.inside_edge_room((0.0, 0.0, 5.0, 5.0), sizes), 0)
+        centres = cl.arrange_images([(2.0, 2.0)] * 3, sizes, cl.EDGES,
+                                    extent=(0.0, 0.0, 5.0, 5.0))
+        self.assertFalse(cl.images_overlap(centres, sizes))
+
+    def test_many_photos_never_fail(self):
+        rng = random.Random(9)
+        anchors = [(rng.gauss(0, 5), rng.gauss(0, 5)) for _ in range(150)]
+        sizes = [(7.5, 10.0)] * 150
+        centres = self.check_no_overlap(anchors, sizes, (-40, -40, 40, 40))
+        self.assertEqual(self.count_crossings(anchors, centres), 0)
+
+    def check_no_overlap(self, anchors, sizes, extent):
+        centres = cl.arrange_images(anchors, sizes, cl.EDGES, extent=extent)
+        self.assertFalse(cl.images_overlap(centres, sizes))
+        return centres
 
     def test_needs_an_extent(self):
         with self.assertRaises(ValueError):
@@ -246,29 +271,45 @@ class TestEdges(unittest.TestCase, LayoutChecks):
 
 
 class TestEdgeSlots(unittest.TestCase):
-    def test_outer_edge_room(self):
+    def rings(self, extent, size, count):
+        return list(itertools.islice(cl.edge_slots(extent, size, 1.0),
+                                     count))
+
+    def test_inside_edge_room(self):
         extent = (-45.0, -45.0, 45.0, 45.0)
         sizes = [(10.0, 10.0)] * 3
-        self.assertEqual(cl.outer_edge_room(extent, sizes, 2.0), 24)
-        self.assertEqual(cl.outer_edge_room((0, 0, 5, 5), sizes, 2.0), 0)
+        self.assertEqual(cl.inside_edge_room(extent, sizes, 2.0), 24)
+        self.assertEqual(cl.inside_edge_room((0, 0, 5, 5), sizes, 2.0), 0)
 
-    def test_slots_never_overlap_and_stay_inside(self):
+    def test_slots_never_overlap(self):
         for extent, size in [((0, 0, 100, 60), (8, 10)),
                              ((0, 0, 30, 200), (8, 10)),
                              ((0, 0, 11, 12), (8, 10)),
-                             ((0, 0, 500, 13), (8, 10))]:
-            slots = [slot for _, ring in cl.edge_slots(extent, size, 1.0)
+                             ((0, 0, 500, 13), (8, 10)),
+                             ((0, 0, 3, 3), (8, 10))]:
+            slots = [slot for _, ring in self.rings(extent, size, 4)
                      for slot in ring]
-            self.assertTrue(slots)
             self.assertEqual(len(set(slots)), len(slots))
             self.assertFalse(cl.images_overlap(slots, [size] * len(slots)))
-            for slot in slots:
-                self.assertTrue(inside(extent, slot, size))
+
+    def test_first_ring_is_inside_and_the_rest_outside(self):
+        extent, size = (0, 0, 100, 60), (8, 10)
+        rings = self.rings(extent, size, 3)
+        self.assertEqual([number for number, _ in rings], [0, 1, 2])
+        for slot in rings[0][1]:
+            self.assertTrue(inside(extent, slot, size))
+        for _, ring in rings[1:]:
+            for x, y in ring:
+                self.assertFalse(0 < x < 100 and 0 < y < 60)
+
+    def test_no_inside_ring_when_nothing_fits_inside(self):
+        rings = self.rings((0, 0, 3, 3), (8, 10), 2)
+        self.assertEqual([number for number, _ in rings], [1, 2])
 
     def test_single_row_when_only_one_fits_vertically(self):
-        rings = list(cl.edge_slots((0, 0, 100, 13), (8, 10), 1.0))
-        self.assertEqual(len(rings), 1)
-        self.assertEqual(len({y for _, y in rings[0][1]}), 1)
+        number, ring = self.rings((0, 0, 100, 13), (8, 10), 1)[0]
+        self.assertEqual(number, 0)
+        self.assertEqual(len({y for _, y in ring}), 1)
 
 
 class TestAssign(unittest.TestCase):
@@ -367,7 +408,7 @@ class TestThumbnail(unittest.TestCase):
         return buffer.getvalue()
 
     def test_rotates_sideways_photo_upright(self):
-        out = os.path.join(self.tmp.name, "thumb.jpg")
+        out = os.path.join(self.tmp.name, "thumb.png")
         width, height = cl.make_thumbnail(self.sideways_photo_bytes(), out,
                                           max_pixels=200)
         self.assertGreater(height, width)
@@ -380,16 +421,16 @@ class TestThumbnail(unittest.TestCase):
         src = os.path.join(self.tmp.name, "photo.jpg")
         with open(src, "wb") as f:
             f.write(self.sideways_photo_bytes())
-        out = os.path.join(self.tmp.name, "thumb.jpg")
+        out = os.path.join(self.tmp.name, "thumb.png")
         width, height = cl.make_thumbnail(src, out, max_pixels=100)
         # 100 px of photo plus the mat and edge on both sides.
         self.assertLessEqual(max(width, height), 100 + 2 * (3 + 1))
 
     def test_data_url(self):
-        out = os.path.join(self.tmp.name, "thumb.jpg")
+        out = os.path.join(self.tmp.name, "thumb.png")
         cl.make_thumbnail(self.sideways_photo_bytes(), out)
         url = cl.image_data_url(out)
-        self.assertTrue(url.startswith("data:image/jpeg;base64,/9j/"))
+        self.assertTrue(url.startswith("data:image/png;base64,iVBORw0KGgo"))
 
 
 if __name__ == "__main__":

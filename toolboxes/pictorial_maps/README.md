@@ -28,11 +28,10 @@ vertex. So the picture can't come apart from its line:
    folder of photos. Check **Add Photos As Attachments**: the photos are then
    copied into the geodatabase, so the callouts tool can still read them if
    the original files are moved or only online (for example in OneDrive).
-2. Select the points you want callouts for. With a selection, only the
-   selected points get callouts. A pictorial map reads best with around 5 to
-   15 pictures; dozens of pictures fill the whole map.
+2. Optional: select the points you want callouts for. With a selection,
+   only the selected points get callouts.
 3. Zoom the map (or the map frame in your layout) to show the area you want
-   in the finished map. The pictures are placed inside what's shown.
+   in the finished map. The pictures go around the edges of what's shown.
 4. Run **Create Photo Callouts** with the photo points layer as the input.
 5. Drag pictures to tidy up the layout (see above).
 
@@ -47,9 +46,9 @@ vertex. So the picture can't come apart from its line:
 - **Arrange Images:**
   - *Along the edges of the map* (default): pictures go around the inside
     edges of the map view (or the Picture Area), each as near its photo as
-    possible, and leader lines don't cross. If the edges are full, more
-    pictures go in rows further in. If they don't fit at all, the tool stops
-    and says how many fit.
+    possible, and leader lines don't cross. Once the inside edge is full,
+    the rest go in rows just outside the map, so every photo gets a picture.
+    Zoom out to see those.
   - *Around the photos:* pictures go on a ring around the photo points, in
     the same order as the points, so leader lines don't cross. Many photos
     close together need a big ring, which can reach past the edge of the
@@ -64,9 +63,9 @@ vertex. So the picture can't come apart from its line:
   the map's current reference scale or, if it doesn't have one, to use the
   current view scale. To turn the reference scale off later: map
   **Properties** > **General** > **Reference scale** > *None*.
-- **Picture Area:** for *Along the edges of the map*, the area to keep the
-  pictures inside. Leave it blank to use what the active map view shows,
-  or, in a layout, what the map frame shows.
+- **Picture Area:** for *Along the edges of the map*, the area whose edges
+  the pictures go around. Leave it blank to use what the active map view
+  shows, or, in a layout, what the map frame shows.
 
 ### Output fields
 
@@ -77,7 +76,7 @@ vertex. So the picture can't come apart from its line:
 | `PhotoPath` | Original photo file path (the `Path` field) |
 | `PhotoTime` | When the photo was taken (the `DateTime` field) |
 | `Direction` | Compass direction the camera faced (the `Direction` field) |
-| `ImageFile` | The upright, framed copy of the photo used on the map |
+| `ImageFile` | The upright, framed copy of the photo used on the map (PNG) |
 
 ## Notes
 
@@ -85,6 +84,10 @@ vertex. So the picture can't come apart from its line:
   Layers**), pictures outside that shape would be cut off. The tool adds the
   callouts layer to the map's **Exclude layers from clipping** list so they
   still show.
+- The tool reads the symbols back after drawing the pictures and reports
+  how many callouts have one ("Pictures set on N callouts"). If the lines
+  show without pictures, run Style Photo Callouts on the layer and check its
+  messages.
 - Phone photos are often saved sideways with a tag saying which way to turn
   them. ArcGIS picture symbols ignore that tag, so the tool turns the pictures
   upright itself.

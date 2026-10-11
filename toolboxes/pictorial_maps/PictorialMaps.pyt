@@ -196,19 +196,10 @@ class CreatePhotoCallouts:
         extent = None
         if arrangement == callout_layout.EDGES:
             extent = _picture_area(parameters[5].value, sr)
-        try:
-            centres = callout_layout.arrange_images(
-                anchors, sizes, arrangement, extent=extent)
-        except callout_layout.NotEnoughRoom as error:
-            arcpy.AddError(
-                "{} pictures at {:g} pt don't fit in the map area: there is "
-                "room for {}. Select fewer photos, lower the Image Height, or "
-                "zoom out (or set a larger Picture Area) and run the tool "
-                "again.".format(error.count, image_height_pt,
-                                error.capacity))
-            raise arcpy.ExecuteError
+        centres = callout_layout.arrange_images(
+            anchors, sizes, arrangement, extent=extent)
         if extent is not None:
-            _warn_if_inner_rows(extent, sizes, len(anchors))
+            _report_pictures_outside(extent, sizes, len(anchors))
         else:
             _warn_if_spread_out(anchors, centres, sr, scale, image_height_pt)
 
@@ -216,7 +207,8 @@ class CreatePhotoCallouts:
         arcpy.AddMessage(
             "Images are {:g} pt tall at 1:{:,.0f}. To move a picture, select "
             "its callout, open Edit Vertices and drag the vertex at the "
-            "centre of the picture.".format(image_height_pt, scale))
+            "centre of the picture. If the pictures don't show, run Style "
+            "Photo Callouts on the new layer.".format(image_height_pt, scale))
         return
 
     def postExecute(self, parameters):
@@ -307,14 +299,13 @@ def _picture_area(requested, sr):
     return (extent.XMin, extent.YMin, extent.XMax, extent.YMax)
 
 
-def _warn_if_inner_rows(extent, sizes, count):
-    room = callout_layout.outer_edge_room(extent, sizes)
+def _report_pictures_outside(extent, sizes, count):
+    room = callout_layout.inside_edge_room(extent, sizes)
     if count > room:
-        arcpy.AddWarning(
-            "Only {} of the {} pictures fit along the edges of the map, so "
-            "the rest are in rows further in and may cover part of the map. "
-            "Select fewer photos or lower the Image Height for a cleaner "
-            "map.".format(room, count))
+        arcpy.AddMessage(
+            "{} of the {} pictures fit along the inside edges of the map. "
+            "The other {} are in rows just outside it: zoom out to see "
+            "them.".format(room, count, count - room))
 
 
 # Leader lines longer than this on the page usually mean the pictures ended
@@ -516,7 +507,7 @@ def _extract_images(in_photos, photos, image_folder):
             continue
         safe = re.sub(r"[^\w\-]+", "_", os.path.splitext(photo["name"])[0])
         out_path = os.path.join(image_folder,
-                                "{}_{}.jpg".format(photo["oid"], safe))
+                                "{}_{}.png".format(photo["oid"], safe))
         try:
             width, height = callout_layout.make_thumbnail(source, out_path)
         except Exception as error:
@@ -676,6 +667,7 @@ def _apply_callout_symbology(layer, image_height_pt, requested_scale):
     definition = layer.getDefinition("V3")
     definition.renderer = _callout_renderer(rows, image_height_pt)
     layer.setDefinition(definition)
+    _check_pictures_kept(layer, len(rows))
 
     m = _current_map()
     if m is not None:
@@ -729,6 +721,9 @@ def _picture_layer(image_file, height_pt):
     picture.enable = True
     picture.url = callout_layout.image_data_url(image_file)
     picture.size = height_pt
+    # Width as a ratio of the picture's own proportions. Left unset it can be
+    # zero, which draws nothing.
+    picture.scaleX = 1.0
     picture.markerPlacement = placement
     return picture
 
@@ -768,6 +763,30 @@ def _callout_renderer(rows, image_height_pt):
     renderer.defaultSymbol = _symbol_reference(_leader_layers())
     renderer.useDefaultSymbol = True
     return renderer
+
+
+def _check_pictures_kept(layer, expected):
+    """Read the symbols back and say how many callouts have a picture, so a
+    problem shows up in the tool messages rather than as empty lines."""
+    try:
+        renderer = layer.getDefinition("V3").renderer
+        kept = 0
+        for group in getattr(renderer, "groups", None) or []:
+            for cls in group.classes or []:
+                for symbol_layer in cls.symbol.symbol.symbolLayers or []:
+                    url = getattr(symbol_layer, "url", None) or ""
+                    if url.startswith("data:image"):
+                        kept += 1
+    except Exception as error:
+        arcpy.AddWarning("Could not check the pictures: {}".format(error))
+        return
+    if kept == expected:
+        arcpy.AddMessage("Pictures set on {} callouts.".format(kept))
+    else:
+        arcpy.AddWarning(
+            "Pictures were set on {} callouts but only {} kept them. Please "
+            "send these messages to whoever maintains this "
+            "toolbox.".format(expected, kept))
 
 
 def _exclude_from_clipping(m, layer):

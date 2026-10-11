@@ -22,9 +22,10 @@ METERS_PER_INCH = 0.0254
 # Space left between neighbouring images, as a fraction of the image height.
 GAP_FRACTION = 0.2
 
-# Longest side of the thumbnails, in pixels. Big enough to print a photo about
-# two inches tall at 300 dpi while keeping the project file small.
-THUMBNAIL_PIXELS = 600
+# Longest side of the thumbnails, in pixels. Sharp on screen and in print at
+# the default size, while keeping the project file a manageable size (the
+# pictures are stored in the layer's symbols).
+THUMBNAIL_PIXELS = 400
 
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".gif")
 
@@ -55,7 +56,7 @@ def is_image_attachment(name, content_type):
 
 
 def make_thumbnail(source, out_path, max_pixels=THUMBNAIL_PIXELS):
-    """Write a framed, upright JPEG thumbnail of a photo.
+    """Write a framed, upright PNG thumbnail of a photo.
 
     `source` is a file path or the photo's bytes. Phone photos are often stored
     sideways with an EXIF tag saying how to rotate them; ArcGIS picture markers
@@ -78,16 +79,16 @@ def make_thumbnail(source, out_path, max_pixels=THUMBNAIL_PIXELS):
         mat = max(3, round(max(photo.size) * 0.03))
         framed = ImageOps.expand(photo, border=mat, fill=(255, 255, 255))
         framed = ImageOps.expand(framed, border=1, fill=(60, 60, 60))
-        framed.save(out_path, "JPEG", quality=85, optimize=True)
+        framed.save(out_path, "PNG", optimize=True)
         return framed.size
 
 
 def image_data_url(path):
-    """Return a JPEG file as a data URL, the form ArcGIS Pro uses to embed
-    pictures in symbols."""
+    """Return a PNG file as a base64 data URL, the form ArcGIS Pro uses to
+    embed pictures in symbols."""
     with open(path, "rb") as f:
         encoded = base64.b64encode(f.read()).decode("ascii")
-    return "data:image/jpeg;base64," + encoded
+    return "data:image/png;base64," + encoded
 
 
 # ---------------------------------------------------------------------------
@@ -95,35 +96,24 @@ def image_data_url(path):
 # ---------------------------------------------------------------------------
 
 
-class NotEnoughRoom(ValueError):
-    """The images don't all fit in the area they must stay inside."""
-
-    def __init__(self, capacity, count):
-        ValueError.__init__(
-            self, "Room for {} images, {} needed".format(capacity, count))
-        self.capacity = capacity
-        self.count = count
-
-
 def arrange_images(anchors, sizes, arrangement=EDGES, gap=None, extent=None):
     """Choose where each image goes.
 
     anchors     -- list of (x, y) photo locations
     sizes       -- list of (width, height) image sizes, same order as anchors
-    arrangement -- EDGES: along the inside edges of `extent`, so every image
-                   is inside the area being mapped. Further rows inside the
-                   first are used only if the edge is full.
+    arrangement -- EDGES: along the inside edges of `extent`, the area being
+                   mapped. When that edge is full, the rest go in rows
+                   outside the extent.
                    AROUND: on a ring around all the photos, in the same order
                    as the photos so leader lines don't cross.
                    ROW_ABOVE: in one row above the highest photo, ordered
                    west to east.
     gap         -- space to keep between images. Defaults to a fraction of
                    the tallest image.
-    extent      -- (xmin, ymin, xmax, ymax) of the area to fill. Needed for
-                   EDGES.
+    extent      -- (xmin, ymin, xmax, ymax) of the area being mapped.
+                   Needed for EDGES.
 
     Returns a list of (x, y) image centres in the same order as anchors.
-    Raises NotEnoughRoom if EDGES can't fit all the images in the extent.
     """
     if len(anchors) != len(sizes):
         raise ValueError("anchors and sizes must be the same length")
@@ -232,45 +222,55 @@ def _row_above_layout(anchors, sizes, gap):
 
 
 def edge_slots(extent, slot_size, gap):
-    """Places for images around the inside edges of an extent, ring by ring
-    inwards. Each ring is inset by one image plus the gap, so no two places
-    overlap. Yields (ring number, [(x, y), ...]) until the extent is full.
+    """Places for images around the edges of an extent: first a ring just
+    inside the edges, then rings further and further outside them. Rings are
+    one image plus the gap apart, so no two places overlap.
+
+    Yields (ring number, [(x, y), ...]) without end; ring 0 is the inside
+    ring and is skipped if not even one image fits inside the extent.
     """
     xmin, ymin, xmax, ymax = extent
     width, height = slot_size
     step_x, step_y = width + gap, height + gap
-    ring = 0
+
+    left = xmin + gap + width / 2.0
+    right = xmax - gap - width / 2.0
+    bottom = ymin + gap + height / 2.0
+    top = ymax - gap - height / 2.0
+    if left <= right and bottom <= top:
+        yield 0, _ring_slots(left, right, bottom, top, step_x, step_y)
+
+    ring = 1
     while True:
-        left = xmin + gap + width / 2.0 + ring * step_x
-        right = xmax - gap - width / 2.0 - ring * step_x
-        bottom = ymin + gap + height / 2.0 + ring * step_y
-        top = ymax - gap - height / 2.0 - ring * step_y
-        if right < left or top < bottom:
-            return
-        xs = _evenly_spaced(left, right, step_x)
-        ys = _evenly_spaced(bottom, top, step_y)
-        if len(ys) == 1:
-            slots = [(x, ys[0]) for x in xs]
-        elif len(xs) == 1:
-            slots = [(xs[0], y) for y in ys]
-        else:
-            slots = ([(x, top) for x in xs] +
-                     [(right, y) for y in reversed(ys[1:-1])] +
-                     [(x, bottom) for x in reversed(xs)] +
-                     [(left, y) for y in ys[1:-1]])
-        yield ring, slots
+        out_x = gap + width / 2.0 + (ring - 1) * step_x
+        out_y = gap + height / 2.0 + (ring - 1) * step_y
+        yield ring, _ring_slots(xmin - out_x, xmax + out_x,
+                                ymin - out_y, ymax + out_y, step_x, step_y)
         ring += 1
 
 
-def outer_edge_room(extent, sizes, gap=None):
-    """How many images of these sizes fit along the edges of an extent
-    before EDGES has to start a row further in."""
+def _ring_slots(left, right, bottom, top, step_x, step_y):
+    """Image centres around a rectangle, clockwise from the top left."""
+    xs = _evenly_spaced(left, right, step_x)
+    ys = _evenly_spaced(bottom, top, step_y)
+    if len(ys) == 1:
+        return [(x, ys[0]) for x in xs]
+    if len(xs) == 1:
+        return [(xs[0], y) for y in ys]
+    return ([(x, top) for x in xs] +
+            [(right, y) for y in reversed(ys[1:-1])] +
+            [(x, bottom) for x in reversed(xs)] +
+            [(left, y) for y in ys[1:-1]])
+
+
+def inside_edge_room(extent, sizes, gap=None):
+    """How many images of these sizes fit along the inside edges of an
+    extent before EDGES starts placing them outside it."""
     if gap is None:
         gap = GAP_FRACTION * max(h for _, h in sizes)
     slot_size = (max(w for w, _ in sizes), max(h for _, h in sizes))
-    for _, slots in edge_slots(extent, slot_size, gap):
-        return len(slots)
-    return 0
+    ring, slots = next(edge_slots(extent, slot_size, gap))
+    return len(slots) if ring == 0 else 0
 
 
 def _evenly_spaced(start, end, min_step):
@@ -291,13 +291,11 @@ def _edge_layout(anchors, sizes, gap, extent):
         rings.extend([ring] * len(ring_slots))
         if len(slots) >= len(anchors):
             break
-    if len(slots) < len(anchors):
-        raise NotEnoughRoom(len(slots), len(anchors))
 
     # Shortest total leader length, so images sit near their photos and no
-    # two leaders cross (the shortest matching never has crossings). Inner
-    # rings cost extra so they are only used when the edge is full, and
-    # places that would hide a photo point cost extra too.
+    # two leaders cross (the shortest matching never has crossings). Outer
+    # rings cost extra so each is only used when the ones inside it are
+    # full, and places that would hide a photo point cost extra too.
     xmin, ymin, xmax, ymax = extent
     diagonal = math.hypot(xmax - xmin, ymax - ymin)
     half_w, half_h = slot_size[0] / 2.0, slot_size[1] / 2.0
