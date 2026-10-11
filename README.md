@@ -48,4 +48,4 @@ your clone of this repository instead.
 
 | Toolbox | Description |
 | ------- | ----------- |
-| _None yet_ | |
+| [Pictorial Maps](toolboxes/pictorial_maps/) | Shows geotagged photos on the map, each joined to where it was taken by a leader line that stays attached when the photo is moved. |
