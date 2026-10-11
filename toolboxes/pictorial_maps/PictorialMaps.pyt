@@ -21,6 +21,7 @@ import callout_layout  # noqa: E402
 importlib.reload(callout_layout)
 
 ARRANGEMENT_LABELS = {
+    "Along the edges of the map": callout_layout.EDGES,
     "Around the photos": callout_layout.AROUND,
     "In a row above the photos": callout_layout.ROW_ABOVE,
 }
@@ -116,7 +117,15 @@ class CreatePhotoCallouts:
         )
         arrangement.filter.type = "ValueList"
         arrangement.filter.list = list(ARRANGEMENT_LABELS)
-        arrangement.value = "Around the photos"
+        arrangement.value = "Along the edges of the map"
+
+        picture_area = arcpy.Parameter(
+            displayName="Picture Area",
+            name="picture_area",
+            datatype="GPExtent",
+            parameterType="Optional",
+            direction="Input",
+        )
 
         return [
             in_photos,
@@ -124,6 +133,7 @@ class CreatePhotoCallouts:
             arrangement,
             _image_height_parameter(),
             _reference_scale_parameter(),
+            picture_area,
         ]
 
     def isLicensed(self):
@@ -140,6 +150,10 @@ class CreatePhotoCallouts:
                                                        workspace))
             except Exception:
                 pass
+        # The picture area only applies when pictures go along the edges.
+        parameters[5].enabled = (
+            ARRANGEMENT_LABELS.get(parameters[2].valueAsText) ==
+            callout_layout.EDGES)
         return
 
     def updateMessages(self, parameters):
@@ -179,7 +193,24 @@ class CreatePhotoCallouts:
             image_height_pt, scale, sr.metersPerUnit)
         anchors = [p["xy"] for p in photos]
         sizes = [(height * p["aspect"], height) for p in photos]
-        centres = callout_layout.arrange_images(anchors, sizes, arrangement)
+        extent = None
+        if arrangement == callout_layout.EDGES:
+            extent = _picture_area(parameters[5].value, sr)
+        try:
+            centres = callout_layout.arrange_images(
+                anchors, sizes, arrangement, extent=extent)
+        except callout_layout.NotEnoughRoom as error:
+            arcpy.AddError(
+                "{} pictures at {:g} pt don't fit in the map area: there is "
+                "room for {}. Select fewer photos, lower the Image Height, or "
+                "zoom out (or set a larger Picture Area) and run the tool "
+                "again.".format(error.count, image_height_pt,
+                                error.capacity))
+            raise arcpy.ExecuteError
+        if extent is not None:
+            _warn_if_inner_rows(extent, sizes, len(anchors))
+        else:
+            _warn_if_spread_out(anchors, centres, sr, scale, image_height_pt)
 
         _write_callouts(out_callouts, sr, photos, centres)
         arcpy.AddMessage(
@@ -258,6 +289,59 @@ class StylePhotoCallouts:
         return
 
 
+def _picture_area(requested, sr):
+    """The (xmin, ymin, xmax, ymax) to keep pictures inside, in `sr`: the
+    Picture Area parameter, else what the map view or map frame shows."""
+    extent = requested
+    if extent is None:
+        camera = _active_map_and_camera()[1]
+        if camera is not None:
+            extent = camera.getExtent()
+    if extent is None:
+        arcpy.AddError("Set a Picture Area. There is no active map view or "
+                       "layout to take one from.")
+        raise arcpy.ExecuteError
+    extent_sr = extent.spatialReference
+    if extent_sr is not None and extent_sr.name and extent_sr.name != sr.name:
+        extent = extent.projectAs(sr)
+    return (extent.XMin, extent.YMin, extent.XMax, extent.YMax)
+
+
+def _warn_if_inner_rows(extent, sizes, count):
+    room = callout_layout.outer_edge_room(extent, sizes)
+    if count > room:
+        arcpy.AddWarning(
+            "Only {} of the {} pictures fit along the edges of the map, so "
+            "the rest are in rows further in and may cover part of the map. "
+            "Select fewer photos or lower the Image Height for a cleaner "
+            "map.".format(room, count))
+
+
+# Leader lines longer than this on the page usually mean the pictures ended
+# up outside the area being mapped.
+LONG_LEADER_INCHES = 4.0
+
+
+def _warn_if_spread_out(anchors, centres, sr, scale, image_height_pt):
+    """Pictures can't overlap, so many photos close together push them far
+    out. Say so, rather than leave pictures off the edge of the view."""
+    longest = callout_layout.longest_leader(anchors, centres)
+    per_inch = callout_layout.page_points_to_map_units(
+        callout_layout.POINTS_PER_INCH, scale, sr.metersPerUnit)
+    inches = longest / per_inch
+    metres = longest * sr.metersPerUnit
+    arcpy.AddMessage("Longest leader line: {:,.0f} m ({:.1f} in on the "
+                     "page).".format(metres, inches))
+    if inches > LONG_LEADER_INCHES:
+        arcpy.AddWarning(
+            "{} pictures at {:g} pt don't fit near their photos, so some are "
+            "{:,.0f} m away ({:.0f} in on the page at 1:{:,.0f}) and may be "
+            "outside your view. For a readable map, select fewer photos "
+            "(around 5 to 15) or lower the Image Height, then run the tool "
+            "again.".format(len(anchors), image_height_pt, metres, inches,
+                            scale))
+
+
 # ---------------------------------------------------------------------------
 # Reading the photo points
 # ---------------------------------------------------------------------------
@@ -309,11 +393,9 @@ def _choose_spatial_reference(in_photos, photos):
     or feet: the output coordinate system environment, then the map's, then
     the input's, then the UTM zone the photos are in."""
     candidates = [arcpy.env.outputCoordinateSystem]
-    try:
-        candidates.append(
-            arcpy.mp.ArcGISProject("CURRENT").activeMap.spatialReference)
-    except Exception:
-        pass
+    m = _current_map()
+    if m is not None:
+        candidates.append(m.spatialReference)
     in_sr = arcpy.Describe(in_photos).spatialReference
     candidates.append(in_sr)
     for sr in candidates:
@@ -484,18 +566,35 @@ def _write_callouts(out_callouts, sr, photos, centres):
 # ---------------------------------------------------------------------------
 
 
-def _current_map():
+def _active_map_and_camera():
+    """The map being worked on and the camera showing it: the active map
+    view, or in an active layout the map frame showing the active map (or
+    the first map frame). (None, None) outside ArcGIS Pro."""
     try:
-        return arcpy.mp.ArcGISProject("CURRENT").activeMap
+        aprx = arcpy.mp.ArcGISProject("CURRENT")
     except Exception:
-        return None
+        return None, None
+    m = aprx.activeMap
+    view = aprx.activeView
+    camera = getattr(view, "camera", None)
+    if camera is not None:
+        return m, camera
+    if hasattr(view, "listElements"):
+        for frame in view.listElements("MAPFRAME_ELEMENT"):
+            if frame.map is None:
+                continue
+            if m is None or frame.map.name == m.name:
+                return frame.map, frame.camera
+    return m, None
+
+
+def _current_map():
+    return _active_map_and_camera()[0]
 
 
 def _view_scale():
-    try:
-        return arcpy.mp.ArcGISProject("CURRENT").activeView.camera.scale
-    except Exception:
-        return None
+    camera = _active_map_and_camera()[1]
+    return camera.scale if camera is not None else None
 
 
 def _resolve_reference_scale(requested):
@@ -580,6 +679,7 @@ def _apply_callout_symbology(layer, image_height_pt, requested_scale):
 
     m = _current_map()
     if m is not None:
+        _exclude_from_clipping(m, layer)
         scale = requested_scale or m.referenceScale or _view_scale()
         if scale and m.referenceScale != scale:
             m.referenceScale = scale
@@ -668,3 +768,19 @@ def _callout_renderer(rows, image_height_pt):
     renderer.defaultSymbol = _symbol_reference(_leader_layers())
     renderer.useDefaultSymbol = True
     return renderer
+
+
+def _exclude_from_clipping(m, layer):
+    """Let the callouts draw past the map's clipping shape (Map Properties >
+    Clip Layers), so pictures placed outside it still show."""
+    try:
+        uri = layer.getDefinition("V3").uRI
+        definition = m.getDefinition("V3")
+        excluded = list(definition.layersExcludedFromClipping or [])
+        if uri and uri not in excluded:
+            definition.layersExcludedFromClipping = excluded + [uri]
+            m.setDefinition(definition)
+    except Exception as error:
+        arcpy.AddWarning(
+            "If the map clips its layers, exclude the callouts layer from "
+            "clipping in Map Properties > Clip Layers ({}).".format(error))

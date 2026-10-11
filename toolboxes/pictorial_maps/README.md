@@ -5,7 +5,7 @@ was taken by a leader line.
 
 | Tool | What it does |
 | ---- | ------------ |
-| **Create Photo Callouts** | Takes the points from Geotagged Photos To Points, pulls out each photo, arranges the pictures so they don't overlap and draws a leader line from each point to its picture. |
+| **Create Photo Callouts** | Takes the points from Geotagged Photos To Points, pulls out each photo, arranges the pictures around the edges of the map so they don't overlap and draws a leader line from each point to its picture. |
 | **Style Photo Callouts** | Redraws the pictures on a callouts layer, for example to change their size. |
 
 ## How the line stays attached to the picture
@@ -28,9 +28,11 @@ vertex. So the picture can't come apart from its line:
    folder of photos. Check **Add Photos As Attachments**: the photos are then
    copied into the geodatabase, so the callouts tool can still read them if
    the original files are moved or only online (for example in OneDrive).
-2. Optional: select the points you want callouts for. With a selection, only
-   the selected points get callouts.
-3. Zoom the map to roughly the scale you want for the finished map.
+2. Select the points you want callouts for. With a selection, only the
+   selected points get callouts. A pictorial map reads best with around 5 to
+   15 pictures; dozens of pictures fill the whole map.
+3. Zoom the map (or the map frame in your layout) to show the area you want
+   in the finished map. The pictures are placed inside what's shown.
 4. Run **Create Photo Callouts** with the photo points layer as the input.
 5. Drag pictures to tidy up the layout (see above).
 
@@ -43,8 +45,15 @@ vertex. So the picture can't come apart from its line:
   the photos are saved in a folder next to its geodatabase, named
   `<output name>_images`.
 - **Arrange Images:**
+  - *Along the edges of the map* (default): pictures go around the inside
+    edges of the map view (or the Picture Area), each as near its photo as
+    possible, and leader lines don't cross. If the edges are full, more
+    pictures go in rows further in. If they don't fit at all, the tool stops
+    and says how many fit.
   - *Around the photos:* pictures go on a ring around the photo points, in
-    the same order as the points, so leader lines don't cross.
+    the same order as the points, so leader lines don't cross. Many photos
+    close together need a big ring, which can reach past the edge of the
+    view; the tool warns when that happens.
   - *In a row above the photos:* pictures go in one row above the highest
     point, ordered west to east.
 - **Image Height (points):** how tall each picture is on the page, at the
@@ -55,6 +64,9 @@ vertex. So the picture can't come apart from its line:
   the map's current reference scale or, if it doesn't have one, to use the
   current view scale. To turn the reference scale off later: map
   **Properties** > **General** > **Reference scale** > *None*.
+- **Picture Area:** for *Along the edges of the map*, the area to keep the
+  pictures inside. Leave it blank to use what the active map view shows,
+  or, in a layout, what the map frame shows.
 
 ### Output fields
 
@@ -69,6 +81,10 @@ vertex. So the picture can't come apart from its line:
 
 ## Notes
 
+- If the map clips its layers to a shape (Map **Properties** > **Clip
+  Layers**), pictures outside that shape would be cut off. The tool adds the
+  callouts layer to the map's **Exclude layers from clipping** list so they
+  still show.
 - Phone photos are often saved sideways with a tag saying which way to turn
   them. ArcGIS picture symbols ignore that tag, so the tool turns the pictures
   upright itself.

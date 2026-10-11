@@ -11,9 +11,10 @@ import bisect
 import io
 import math
 
+EDGES = "EDGES"
 AROUND = "AROUND"
 ROW_ABOVE = "ROW_ABOVE"
-ARRANGEMENTS = (AROUND, ROW_ABOVE)
+ARRANGEMENTS = (EDGES, AROUND, ROW_ABOVE)
 
 POINTS_PER_INCH = 72.0
 METERS_PER_INCH = 0.0254
@@ -94,19 +95,35 @@ def image_data_url(path):
 # ---------------------------------------------------------------------------
 
 
-def arrange_images(anchors, sizes, arrangement=AROUND, gap=None):
+class NotEnoughRoom(ValueError):
+    """The images don't all fit in the area they must stay inside."""
+
+    def __init__(self, capacity, count):
+        ValueError.__init__(
+            self, "Room for {} images, {} needed".format(capacity, count))
+        self.capacity = capacity
+        self.count = count
+
+
+def arrange_images(anchors, sizes, arrangement=EDGES, gap=None, extent=None):
     """Choose where each image goes.
 
     anchors     -- list of (x, y) photo locations
     sizes       -- list of (width, height) image sizes, same order as anchors
-    arrangement -- AROUND: on a ring around all the photos, in the same order
+    arrangement -- EDGES: along the inside edges of `extent`, so every image
+                   is inside the area being mapped. Further rows inside the
+                   first are used only if the edge is full.
+                   AROUND: on a ring around all the photos, in the same order
                    as the photos so leader lines don't cross.
                    ROW_ABOVE: in one row above the highest photo, ordered
                    west to east.
     gap         -- space to keep between images. Defaults to a fraction of
                    the tallest image.
+    extent      -- (xmin, ymin, xmax, ymax) of the area to fill. Needed for
+                   EDGES.
 
     Returns a list of (x, y) image centres in the same order as anchors.
+    Raises NotEnoughRoom if EDGES can't fit all the images in the extent.
     """
     if len(anchors) != len(sizes):
         raise ValueError("anchors and sizes must be the same length")
@@ -114,7 +131,11 @@ def arrange_images(anchors, sizes, arrangement=AROUND, gap=None):
         return []
     if gap is None:
         gap = GAP_FRACTION * max(h for _, h in sizes)
-    if arrangement == AROUND:
+    if arrangement == EDGES:
+        if extent is None:
+            raise ValueError("EDGES needs an extent")
+        centres = _edge_layout(anchors, sizes, gap, extent)
+    elif arrangement == AROUND:
         centres = _ring_layout(anchors, sizes, gap)
     elif arrangement == ROW_ABOVE:
         centres = _row_above_layout(anchors, sizes, gap)
@@ -208,6 +229,140 @@ def _row_above_layout(anchors, sizes, gap):
     for i, x in zip(order, placed):
         centres[i] = (x, row_y)
     return centres
+
+
+def edge_slots(extent, slot_size, gap):
+    """Places for images around the inside edges of an extent, ring by ring
+    inwards. Each ring is inset by one image plus the gap, so no two places
+    overlap. Yields (ring number, [(x, y), ...]) until the extent is full.
+    """
+    xmin, ymin, xmax, ymax = extent
+    width, height = slot_size
+    step_x, step_y = width + gap, height + gap
+    ring = 0
+    while True:
+        left = xmin + gap + width / 2.0 + ring * step_x
+        right = xmax - gap - width / 2.0 - ring * step_x
+        bottom = ymin + gap + height / 2.0 + ring * step_y
+        top = ymax - gap - height / 2.0 - ring * step_y
+        if right < left or top < bottom:
+            return
+        xs = _evenly_spaced(left, right, step_x)
+        ys = _evenly_spaced(bottom, top, step_y)
+        if len(ys) == 1:
+            slots = [(x, ys[0]) for x in xs]
+        elif len(xs) == 1:
+            slots = [(xs[0], y) for y in ys]
+        else:
+            slots = ([(x, top) for x in xs] +
+                     [(right, y) for y in reversed(ys[1:-1])] +
+                     [(x, bottom) for x in reversed(xs)] +
+                     [(left, y) for y in ys[1:-1]])
+        yield ring, slots
+        ring += 1
+
+
+def outer_edge_room(extent, sizes, gap=None):
+    """How many images of these sizes fit along the edges of an extent
+    before EDGES has to start a row further in."""
+    if gap is None:
+        gap = GAP_FRACTION * max(h for _, h in sizes)
+    slot_size = (max(w for w, _ in sizes), max(h for _, h in sizes))
+    for _, slots in edge_slots(extent, slot_size, gap):
+        return len(slots)
+    return 0
+
+
+def _evenly_spaced(start, end, min_step):
+    """As many values from start to end (inclusive) as fit at least min_step
+    apart, evenly spaced. One value in the middle if only one fits."""
+    count = int((end - start) // min_step) + 1
+    if count == 1:
+        return [(start + end) / 2.0]
+    step = (end - start) / (count - 1)
+    return [start + i * step for i in range(count)]
+
+
+def _edge_layout(anchors, sizes, gap, extent):
+    slot_size = (max(w for w, _ in sizes), max(h for _, h in sizes))
+    slots, rings = [], []
+    for ring, ring_slots in edge_slots(extent, slot_size, gap):
+        slots.extend(ring_slots)
+        rings.extend([ring] * len(ring_slots))
+        if len(slots) >= len(anchors):
+            break
+    if len(slots) < len(anchors):
+        raise NotEnoughRoom(len(slots), len(anchors))
+
+    # Shortest total leader length, so images sit near their photos and no
+    # two leaders cross (the shortest matching never has crossings). Inner
+    # rings cost extra so they are only used when the edge is full, and
+    # places that would hide a photo point cost extra too.
+    xmin, ymin, xmax, ymax = extent
+    diagonal = math.hypot(xmax - xmin, ymax - ymin)
+    half_w, half_h = slot_size[0] / 2.0, slot_size[1] / 2.0
+    penalties = []
+    for (sx, sy), ring in zip(slots, rings):
+        hides_photo = any(abs(ax - sx) < half_w and abs(ay - sy) < half_h
+                          for ax, ay in anchors)
+        penalties.append(ring * 3.0 * diagonal +
+                         (1.5 * diagonal if hides_photo else 0.0))
+    costs = [[math.hypot(sx - ax, sy - ay) + penalty
+              for (sx, sy), penalty in zip(slots, penalties)]
+             for ax, ay in anchors]
+    return [slots[j] for j in assign(costs)]
+
+
+def assign(costs):
+    """Give each row of a cost matrix its own column, at least total cost
+    (the Hungarian algorithm). Needs no more rows than columns. Returns the
+    column chosen for each row."""
+    rows = len(costs)
+    cols = len(costs[0]) if rows else 0
+    if rows > cols:
+        raise ValueError("more rows than columns")
+    inf = float("inf")
+    u = [0.0] * (rows + 1)
+    v = [0.0] * (cols + 1)
+    owner = [0] * (cols + 1)  # row (1-based) holding each column, 0 = free
+    way = [0] * (cols + 1)
+    for row in range(1, rows + 1):
+        owner[0] = row
+        col0 = 0
+        min_slack = [inf] * (cols + 1)
+        used = [False] * (cols + 1)
+        while True:
+            used[col0] = True
+            row0 = owner[col0]
+            row_costs = costs[row0 - 1]
+            delta, col1 = inf, 0
+            for col in range(1, cols + 1):
+                if used[col]:
+                    continue
+                slack = row_costs[col - 1] - u[row0] - v[col]
+                if slack < min_slack[col]:
+                    min_slack[col] = slack
+                    way[col] = col0
+                if min_slack[col] < delta:
+                    delta, col1 = min_slack[col], col
+            for col in range(cols + 1):
+                if used[col]:
+                    u[owner[col]] += delta
+                    v[col] -= delta
+                else:
+                    min_slack[col] -= delta
+            col0 = col1
+            if owner[col0] == 0:
+                break
+        while col0:
+            col1 = way[col0]
+            owner[col0] = owner[col1]
+            col0 = col1
+    chosen = [None] * rows
+    for col in range(1, cols + 1):
+        if owner[col]:
+            chosen[owner[col] - 1] = col - 1
+    return chosen
 
 
 class _Ellipse:
@@ -314,6 +469,12 @@ def _place_on_ring(ellipse, anchors, spacing):
     for i, distance in zip(order, placed):
         centres[i] = ellipse.point_at(distance)
     return centres
+
+
+def longest_leader(anchors, centres):
+    """Length of the longest line from a photo to its image."""
+    return max(math.hypot(cx - ax, cy - ay)
+               for (ax, ay), (cx, cy) in zip(anchors, centres))
 
 
 def segments_cross(p1, p2, q1, q2):

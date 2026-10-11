@@ -119,7 +119,7 @@ class TestAround(unittest.TestCase, LayoutChecks):
     def test_single_photo(self):
         anchors = [(100.0, 200.0)]
         sizes = portrait_sizes(1)
-        centres = cl.arrange_images(anchors, sizes)
+        centres = cl.arrange_images(anchors, sizes, cl.AROUND)
         self.assert_good_layout(anchors, sizes, centres)
         # A lone photo gets its image directly above it.
         self.assertAlmostEqual(centres[0][0], 100.0, places=3)
@@ -128,7 +128,7 @@ class TestAround(unittest.TestCase, LayoutChecks):
     def test_photos_at_the_same_spot(self):
         anchors = [(0.0, 0.0)] * 6
         sizes = portrait_sizes(6)
-        centres = cl.arrange_images(anchors, sizes)
+        centres = cl.arrange_images(anchors, sizes, cl.AROUND)
         self.assert_good_layout(anchors, sizes, centres)
 
     def test_many_random_photos(self):
@@ -138,7 +138,9 @@ class TestAround(unittest.TestCase, LayoutChecks):
                        for _ in range(count)]
             sizes = portrait_sizes(count, 1000, 60)
             for arrangement in cl.ARRANGEMENTS:
-                centres = cl.arrange_images(anchors, sizes, arrangement)
+                centres = cl.arrange_images(
+                    anchors, sizes, arrangement,
+                    extent=(-1000, -1000, 1300, 1120))
                 self.assert_good_layout(anchors, sizes, centres)
                 self.assertEqual(self.count_crossings(anchors, centres), 0)
 
@@ -149,18 +151,148 @@ class TestAround(unittest.TestCase, LayoutChecks):
         h = cl.page_points_to_map_units(90, 1000)
         sizes = [(h * 0.75, h) if i % 2 else (h * 1.33, h)
                  for i in range(12)]
-        centres = cl.arrange_images(anchors, sizes)
+        centres = cl.arrange_images(anchors, sizes, cl.AROUND)
         self.assert_good_layout(anchors, sizes, centres)
 
     def test_images_stay_near_their_photos(self):
         # Two well separated groups: each image should land on its own side.
         anchors = [(0.0, 0.0), (0.0, 10.0), (1000.0, 0.0), (1000.0, 10.0)]
         sizes = portrait_sizes(4, 500)
-        centres = cl.arrange_images(anchors, sizes)
+        centres = cl.arrange_images(anchors, sizes, cl.AROUND)
         self.assertLess(centres[0][0], 500)
         self.assertLess(centres[1][0], 500)
         self.assertGreater(centres[2][0], 500)
         self.assertGreater(centres[3][0], 500)
+
+
+def inside(extent, centre, size):
+    (x, y), (w, h) = centre, size
+    xmin, ymin, xmax, ymax = extent
+    return (xmin <= x - w / 2 and x + w / 2 <= xmax and
+            ymin <= y - h / 2 and y + h / 2 <= ymax)
+
+
+class TestEdges(unittest.TestCase, LayoutChecks):
+    def check(self, anchors, sizes, extent):
+        centres = cl.arrange_images(anchors, sizes, cl.EDGES, extent=extent)
+        self.assert_good_layout(anchors, sizes, centres)
+        self.assertEqual(self.count_crossings(anchors, centres), 0)
+        for centre, size in zip(centres, sizes):
+            self.assertTrue(inside(extent, centre, size),
+                            "an image is outside the map")
+        return centres
+
+    def test_sample_photos_in_a_view_around_them(self):
+        anchors = [xy for _, xy in SAMPLE_PHOTOS]
+        sizes = portrait_sizes(len(anchors), 1000)
+        # A view about 7 x 9 inches at 1:1000, centred on the photos.
+        extent = (310710, 680060, 310890 + 170, 680290 + 230)
+        centres = self.check(anchors, sizes, extent)
+        # All of them fit on the outer edge.
+        slots = next(cl.edge_slots(extent, sizes[0], 0.2 * sizes[0][1]))[1]
+        for centre in centres:
+            self.assertIn(centre, slots)
+
+    def test_many_photos_at_one_spot(self):
+        # Like 45 photos of an eroded shore: most within a few metres, a few
+        # along a lagoon, on a long thin island.
+        rng = random.Random(1)
+        anchors = [(rng.gauss(0, 15), rng.gauss(0, 15)) for _ in range(30)]
+        anchors += [(rng.uniform(-150, 50), rng.uniform(100, 1300))
+                    for _ in range(15)]
+        extent = (-900, -500, 700, 1600)
+        sizes = portrait_sizes(len(anchors), 5000, 60)
+        self.check(anchors, sizes, extent)
+
+    def test_uses_inner_rows_only_when_the_edge_is_full(self):
+        anchors = [(0.0, 0.0)] * 30
+        sizes = [(10.0, 10.0)] * 30
+        extent = (-45.0, -45.0, 45.0, 45.0)
+        centres = self.check(anchors, sizes, extent)
+        outer = next(cl.edge_slots(extent, (10.0, 10.0), 2.0))[1]
+        on_edge = sum(1 for c in centres if c in outer)
+        self.assertEqual(on_edge, len(outer))
+        self.assertLess(len(outer), 30)
+
+    def test_photos_near_one_side_get_images_on_that_side(self):
+        anchors = [(90.0, float(y)) for y in range(0, 100, 20)]
+        sizes = [(10.0, 10.0)] * len(anchors)
+        centres = self.check(anchors, sizes, (-100.0, -50.0, 120.0, 150.0))
+        for x, _ in centres:
+            self.assertGreater(x, 50)
+
+    def test_mixed_orientations(self):
+        rng = random.Random(5)
+        anchors = [(rng.uniform(-50, 50), rng.uniform(-50, 50))
+                   for _ in range(14)]
+        sizes = [(7.5, 10.0) if i % 2 else (13.3, 10.0) for i in range(14)]
+        self.check(anchors, sizes, (-120.0, -100.0, 120.0, 100.0))
+
+    def test_not_enough_room(self):
+        with self.assertRaises(cl.NotEnoughRoom) as caught:
+            cl.arrange_images([(0.0, 0.0)] * 10, [(10.0, 10.0)] * 10,
+                              cl.EDGES, extent=(-15.0, -15.0, 15.0, 15.0))
+        self.assertEqual(caught.exception.capacity, 4)
+        self.assertEqual(caught.exception.count, 10)
+
+    def test_extent_smaller_than_one_image(self):
+        with self.assertRaises(cl.NotEnoughRoom):
+            cl.arrange_images([(0.0, 0.0)], [(10.0, 10.0)], cl.EDGES,
+                              extent=(0.0, 0.0, 5.0, 5.0))
+
+    def test_needs_an_extent(self):
+        with self.assertRaises(ValueError):
+            cl.arrange_images([(0.0, 0.0)], [(1.0, 1.0)], cl.EDGES)
+
+
+class TestEdgeSlots(unittest.TestCase):
+    def test_outer_edge_room(self):
+        extent = (-45.0, -45.0, 45.0, 45.0)
+        sizes = [(10.0, 10.0)] * 3
+        self.assertEqual(cl.outer_edge_room(extent, sizes, 2.0), 24)
+        self.assertEqual(cl.outer_edge_room((0, 0, 5, 5), sizes, 2.0), 0)
+
+    def test_slots_never_overlap_and_stay_inside(self):
+        for extent, size in [((0, 0, 100, 60), (8, 10)),
+                             ((0, 0, 30, 200), (8, 10)),
+                             ((0, 0, 11, 12), (8, 10)),
+                             ((0, 0, 500, 13), (8, 10))]:
+            slots = [slot for _, ring in cl.edge_slots(extent, size, 1.0)
+                     for slot in ring]
+            self.assertTrue(slots)
+            self.assertEqual(len(set(slots)), len(slots))
+            self.assertFalse(cl.images_overlap(slots, [size] * len(slots)))
+            for slot in slots:
+                self.assertTrue(inside(extent, slot, size))
+
+    def test_single_row_when_only_one_fits_vertically(self):
+        rings = list(cl.edge_slots((0, 0, 100, 13), (8, 10), 1.0))
+        self.assertEqual(len(rings), 1)
+        self.assertEqual(len({y for _, y in rings[0][1]}), 1)
+
+
+class TestAssign(unittest.TestCase):
+    def brute_force(self, costs):
+        import itertools
+        cols = range(len(costs[0]))
+        return min(sum(costs[r][c] for r, c in enumerate(choice))
+                   for choice in itertools.permutations(cols, len(costs)))
+
+    def test_matches_brute_force(self):
+        rng = random.Random(11)
+        for _ in range(200):
+            rows = rng.randint(1, 5)
+            cols = rng.randint(rows, 6)
+            costs = [[rng.uniform(0, 10) for _ in range(cols)]
+                     for _ in range(rows)]
+            chosen = cl.assign(costs)
+            self.assertEqual(len(set(chosen)), rows)
+            total = sum(costs[r][c] for r, c in enumerate(chosen))
+            self.assertAlmostEqual(total, self.brute_force(costs))
+
+    def test_more_rows_than_columns(self):
+        with self.assertRaises(ValueError):
+            cl.assign([[1.0], [2.0]])
 
 
 class TestRowAbove(unittest.TestCase, LayoutChecks):
@@ -195,6 +327,13 @@ class TestUncross(unittest.TestCase):
         centres = [(10.0, 10.0), (0.0, 10.0)]
         sizes = [(1.0, 1.0), (2.0, 1.0)]
         self.assertEqual(cl.uncross(anchors, sizes, centres), centres)
+
+
+class TestLongestLeader(unittest.TestCase):
+    def test_longest(self):
+        anchors = [(0.0, 0.0), (10.0, 0.0)]
+        centres = [(3.0, 4.0), (10.0, 1.0)]
+        self.assertAlmostEqual(cl.longest_leader(anchors, centres), 5.0)
 
 
 class TestArguments(unittest.TestCase):
