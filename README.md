@@ -8,7 +8,9 @@ A collection of toolboxes and tools for ArcGIS Pro.
 arctools/
 ├── toolboxes/        # Toolboxes you can add to an ArcGIS Pro project
 │   └── _template/    # Starter Python toolbox (.pyt) to copy for new tools
-└── scripts/          # Standalone arcpy scripts that run outside a toolbox
+├── scripts/          # Standalone arcpy scripts that run outside a toolbox
+└── data/
+    └── images/       # Photos used as input data for the tools
 ```
 
 Each toolbox lives in its own folder under `toolboxes/`, along with any helper
