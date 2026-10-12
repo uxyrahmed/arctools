@@ -275,9 +275,29 @@ class StylePhotoCallouts:
             arcpy.AddError("Run this tool from ArcGIS Pro with the callouts "
                            "layer in the active map.")
             raise arcpy.ExecuteError
-        _apply_callout_symbology(layer, parameters[1].value,
-                                 parameters[2].value)
+        pictures = _read_pictures(layer.dataSource)
+        if not pictures:
+            arcpy.AddError(
+                "None of the callouts' pictures were found. They are the "
+                "files in the {} field; run Create Photo Callouts again if "
+                "they were moved or deleted.".format(F_IMAGE))
+            raise arcpy.ExecuteError
+        arcpy.AddMessage("Found pictures for {} callouts. They are drawn when "
+                         "the tool finishes.".format(len(pictures)))
         parameters[3].value = parameters[0].value
+        return
+
+    def postExecute(self, parameters):
+        """Draw the pictures. This has to happen here, after ArcGIS Pro has
+        put the tool's output layer back in the map: changes made in execute
+        are replaced by Pro's copy of the layer when the tool finishes."""
+        try:
+            layer = _find_map_layer(parameters[0].valueAsText)
+            if layer is not None:
+                _apply_callout_symbology(layer, parameters[1].value,
+                                         parameters[2].value)
+        except Exception as error:
+            arcpy.AddWarning("Could not draw the pictures: {}".format(error))
         return
 
 
@@ -652,16 +672,35 @@ def _style_output(out_callouts, image_height_pt, requested_scale):
             "({}). Run Style Photo Callouts on the layer.".format(error))
 
 
-def _apply_callout_symbology(layer, image_height_pt, requested_scale):
-    """Give each callout a symbol with its picture at the end of the line,
-    and make sure the map has a reference scale so the pictures keep their
-    size relative to the map."""
+def _read_pictures(data_source):
+    """{photo OID as text: (photo name, picture file)} for the callouts
+    whose picture file exists."""
     pictures = {}
-    with arcpy.da.SearchCursor(layer.dataSource,
+    with arcpy.da.SearchCursor(data_source,
                                [F_PHOTO_OID, F_NAME, F_IMAGE]) as cursor:
         for oid, name, image in cursor:
             if image and os.path.isfile(image):
                 pictures[_value_key(oid)] = (name, image)
+    return pictures
+
+
+def _apply_callout_symbology(layer, image_height_pt, requested_scale):
+    """Give each callout a symbol with its picture at the end of the line,
+    and make sure the map has a reference scale so the pictures keep their
+    size relative to the map.
+
+    Only call this from postExecute (or outside a tool): see
+    StylePhotoCallouts.postExecute."""
+    pictures = _read_pictures(layer.dataSource)
+
+    # Change the map first. Setting the map's definition could reload its
+    # layers, so the layer is looked up again before it is styled.
+    m = _current_map()
+    if m is not None:
+        _set_reference_scale(m, requested_scale)
+        uri = layer.getDefinition("V3").uRI
+        if _exclude_from_clipping(m, uri):
+            layer = _layer_with_uri(uri) or layer
 
     # Let ArcGIS Pro make the unique value classes from the values in the
     # data, so every callout is sure to match its class, then give each class
@@ -676,15 +715,26 @@ def _apply_callout_symbology(layer, image_height_pt, requested_scale):
     layer.setDefinition(definition)
     _check_pictures_kept(layer, len(pictures))
 
+
+def _set_reference_scale(m, requested_scale):
+    scale = requested_scale or m.referenceScale or _view_scale()
+    if scale and m.referenceScale != scale:
+        m.referenceScale = scale
+        arcpy.AddMessage(
+            "Set the map's reference scale to 1:{:,.0f} so the pictures "
+            "grow and shrink with the map.".format(scale))
+
+
+def _layer_with_uri(uri):
+    """The layer in the active map with this CIM URI."""
     m = _current_map()
-    if m is not None:
-        _exclude_from_clipping(m, layer)
-        scale = requested_scale or m.referenceScale or _view_scale()
-        if scale and m.referenceScale != scale:
-            m.referenceScale = scale
-            arcpy.AddMessage(
-                "Set the map's reference scale to 1:{:,.0f} so the pictures "
-                "grow and shrink with the map.".format(scale))
+    for layer in m.listLayers() if m is not None else []:
+        try:
+            if layer.isFeatureLayer and layer.getDefinition("V3").uRI == uri:
+                return layer
+        except Exception:
+            continue
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -799,17 +849,20 @@ def _check_pictures_kept(layer, expected):
             "toolbox.".format(expected, kept))
 
 
-def _exclude_from_clipping(m, layer):
-    """Let the callouts draw past the map's clipping shape (Map Properties >
-    Clip Layers), so pictures placed outside it still show."""
+def _exclude_from_clipping(m, uri):
+    """Let the callouts layer draw past the map's clipping shape (Map
+    Properties > Clip Layers), so pictures placed outside it still show.
+    Returns True if the map was changed."""
     try:
-        uri = layer.getDefinition("V3").uRI
         definition = m.getDefinition("V3")
         excluded = list(definition.layersExcludedFromClipping or [])
-        if uri and uri not in excluded:
-            definition.layersExcludedFromClipping = excluded + [uri]
-            m.setDefinition(definition)
+        if not uri or uri in excluded:
+            return False
+        definition.layersExcludedFromClipping = excluded + [uri]
+        m.setDefinition(definition)
+        return True
     except Exception as error:
         arcpy.AddWarning(
             "If the map clips its layers, exclude the callouts layer from "
             "clipping in Map Properties > Clip Layers ({}).".format(error))
+        return False
