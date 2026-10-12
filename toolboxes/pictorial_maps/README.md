@@ -88,6 +88,9 @@ vertex. So the picture can't come apart from its line:
   how many callouts have one ("Pictures set on N callouts"). If the lines
   show without pictures, run Style Photo Callouts on the layer and check its
   messages.
+- The callouts are left out of layout legends: every photo would otherwise
+  be a legend entry. The layer stays on the map. To show it in a legend
+  anyway, tick it under the legend in the layout's Contents pane.
 - Phone photos are often saved sideways with a tag saying which way to turn
   them. ArcGIS picture symbols ignore that tag, so the tool turns the pictures
   upright itself.

@@ -84,10 +84,10 @@ class CreatePhotoCallouts:
         self.label = "Create Photo Callouts"
         self.description = (
             "Shows the photo of each point from Geotagged Photos To Points as "
-            "a picture on the map, joined to its point by a leader line. Each "
-            "callout is one line feature: it starts at the photo point and the "
-            "picture is drawn at its other end, so moving that end moves the "
-            "picture and the line stays attached.")
+            "a picture on the map, joined to its point by a leader line. "
+            "Each callout is one line feature: it starts at the photo point "
+            "and the picture is drawn at its other end, so moving that end "
+            "moves the picture and the line stays attached.")
         self.category = None
 
     def getParameterInfo(self):
@@ -714,6 +714,8 @@ def _apply_callout_symbology(layer, image_height_pt, requested_scale):
     _add_pictures(definition.renderer, pictures, image_height_pt)
     layer.setDefinition(definition)
     _check_pictures_kept(layer, len(pictures))
+    if m is not None:
+        _hide_from_legends(m, layer)
 
 
 def _set_reference_scale(m, requested_scale):
@@ -723,6 +725,36 @@ def _set_reference_scale(m, requested_scale):
         arcpy.AddMessage(
             "Set the map's reference scale to 1:{:,.0f} so the pictures "
             "grow and shrink with the map.".format(scale))
+
+
+def _hide_from_legends(m, layer):
+    """Leave the callouts out of the legends of layouts that show this map:
+    they are decoration, and every photo would otherwise be a legend entry.
+    The layer stays on the map. To show it in a legend again, tick it under
+    the legend in the layout's Contents pane."""
+    try:
+        layouts = set()
+        for layout in arcpy.mp.ArcGISProject("CURRENT").listLayouts():
+            for legend in layout.listElements("LEGEND_ELEMENT"):
+                frame = legend.mapFrame
+                if frame is None or frame.map is None or \
+                        frame.map.name != m.name:
+                    continue
+                for item in list(legend.items):
+                    if item.name != layer.name:
+                        continue
+                    if hasattr(item, "visible"):
+                        item.visible = False
+                    else:
+                        legend.removeItem(item)
+                    layouts.add(layout.name)
+        if layouts:
+            arcpy.AddMessage("Left the callouts out of the legend on "
+                             "{}.".format(", ".join(sorted(layouts))))
+    except Exception as error:
+        arcpy.AddWarning(
+            "To leave the callouts out of a legend, untick them under the "
+            "legend in the layout's Contents pane ({}).".format(error))
 
 
 def _layer_with_uri(uri):

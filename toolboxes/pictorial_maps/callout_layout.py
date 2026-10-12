@@ -364,7 +364,8 @@ def assign(costs):
 
 
 class _Ellipse:
-    """An axis-aligned ellipse that can be walked by distance along its edge."""
+    """An axis-aligned ellipse that can be walked by distance along its
+    edge."""
 
     SAMPLES = 2048
 
@@ -374,7 +375,8 @@ class _Ellipse:
         x0, y0 = self._at(0.0)
         for k in range(1, self.SAMPLES + 1):
             x1, y1 = self._at(2.0 * math.pi * k / self.SAMPLES)
-            self.lengths.append(self.lengths[-1] + math.hypot(x1 - x0, y1 - y0))
+            step = math.hypot(x1 - x0, y1 - y0)
+            self.lengths.append(self.lengths[-1] + step)
             x0, y0 = x1, y1
         self.perimeter = self.lengths[-1]
 
