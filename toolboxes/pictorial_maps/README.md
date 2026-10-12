@@ -43,6 +43,12 @@ vertex. So the picture can't come apart from its line:
 - **Output Callouts:** the new line feature class. Upright, framed copies of
   the photos are saved in a folder next to its geodatabase, named
   `<output name>_images`.
+- **Picture Shape:** *Original* keeps each photo's own shape. *3:4
+  (portrait)* and *4:3 (landscape)* crop every photo to that shape, keeping
+  its middle, so all the pictures match.
+- **Image Height (points):** how tall each picture is on the page, at the
+  reference scale. 72 points is one inch. The width follows from the shape,
+  so 4:3 pictures are wider than 3:4 ones of the same height.
 - **Arrange Images:**
   - *Along the edges of the map* (default): pictures go around the inside
     edges of the map view (or the Picture Area), each as near its photo as
@@ -55,17 +61,15 @@ vertex. So the picture can't come apart from its line:
     view; the tool warns when that happens.
   - *In a row above the photos:* pictures go in one row above the highest
     point, ordered west to east.
-- **Image Height (points):** how tall each picture is on the page, at the
-  reference scale. 72 points is one inch.
+- **Picture Area:** for *Along the edges of the map*, the area whose edges
+  the pictures go around. Leave it blank to use what the active map view
+  shows, or, in a layout, what the map frame shows.
 - **Reference Scale:** the map scale at which pictures are the height above.
   The tool sets the map's reference scale to it, so pictures grow and shrink
   with the map and keep their places when you zoom. Leave it blank to keep
   the map's current reference scale or, if it doesn't have one, to use the
   current view scale. To turn the reference scale off later: map
   **Properties** > **General** > **Reference scale** > *None*.
-- **Picture Area:** for *Along the edges of the map*, the area whose edges
-  the pictures go around. Leave it blank to use what the active map view
-  shows, or, in a layout, what the map frame shows.
 
 ### Output fields
 
@@ -100,6 +104,9 @@ vertex. So the picture can't come apart from its line:
 - Image Height and Reference Scale decide how much room each picture needs.
   If you change them a lot with Style Photo Callouts, the pictures may need
   rearranging. Run Create Photo Callouts again for a fresh layout.
+- The Picture Shape is applied when the pictures are made, so Style Photo
+  Callouts can't change it. Run Create Photo Callouts again with the new
+  shape.
 - Pictures are drawn in the order of the features, so where a leader line
   passes another callout's picture, it can be drawn on top of it. Drag the
   picture a little to clear it.

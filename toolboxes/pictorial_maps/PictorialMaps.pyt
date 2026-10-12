@@ -26,6 +26,13 @@ ARRANGEMENT_LABELS = {
     "In a row above the photos": callout_layout.ROW_ABOVE,
 }
 
+# Width / height to crop the pictures to. None keeps each photo's own shape.
+SHAPE_LABELS = {
+    "Original": None,
+    "3:4 (portrait)": 3.0 / 4.0,
+    "4:3 (landscape)": 4.0 / 3.0,
+}
+
 # Fields written to the callouts feature class.
 F_PHOTO_OID = "PhotoOID"
 F_NAME = "PhotoName"
@@ -67,6 +74,10 @@ def _reference_scale_parameter(name="reference_scale"):
         parameterType="Optional",
         direction="Input",
     )
+
+
+def _by_name(parameters):
+    return {param.name: param for param in parameters}
 
 
 def _check_positive(param, what):
@@ -119,6 +130,17 @@ class CreatePhotoCallouts:
         arrangement.filter.list = list(ARRANGEMENT_LABELS)
         arrangement.value = "Along the edges of the map"
 
+        picture_shape = arcpy.Parameter(
+            displayName="Picture Shape",
+            name="picture_shape",
+            datatype="GPString",
+            parameterType="Required",
+            direction="Input",
+        )
+        picture_shape.filter.type = "ValueList"
+        picture_shape.filter.list = list(SHAPE_LABELS)
+        picture_shape.value = "Original"
+
         picture_area = arcpy.Parameter(
             displayName="Picture Area",
             name="picture_area",
@@ -130,17 +152,19 @@ class CreatePhotoCallouts:
         return [
             in_photos,
             out_callouts,
-            arrangement,
+            picture_shape,
             _image_height_parameter(),
-            _reference_scale_parameter(),
+            arrangement,
             picture_area,
+            _reference_scale_parameter(),
         ]
 
     def isLicensed(self):
         return True
 
     def updateParameters(self, parameters):
-        in_photos, out_callouts = parameters[0], parameters[1]
+        params = _by_name(parameters)
+        in_photos, out_callouts = params["in_photos"], params["out_callouts"]
         if in_photos.value and in_photos.altered and not out_callouts.altered:
             try:
                 name = arcpy.Describe(in_photos.value).baseName
@@ -151,23 +175,27 @@ class CreatePhotoCallouts:
             except Exception:
                 pass
         # The picture area only applies when pictures go along the edges.
-        parameters[5].enabled = (
-            ARRANGEMENT_LABELS.get(parameters[2].valueAsText) ==
+        params["picture_area"].enabled = (
+            ARRANGEMENT_LABELS.get(params["arrangement"].valueAsText) ==
             callout_layout.EDGES)
         return
 
     def updateMessages(self, parameters):
-        _check_positive(parameters[3], "Image height")
-        _check_positive(parameters[4], "Reference scale")
+        params = _by_name(parameters)
+        _check_positive(params["image_height"], "Image height")
+        _check_positive(params["reference_scale"], "Reference scale")
         return
 
     def execute(self, parameters, messages):
-        in_photos = parameters[0].valueAsText
-        out_callouts = parameters[1].valueAsText
-        arrangement = ARRANGEMENT_LABELS.get(parameters[2].valueAsText,
-                                             parameters[2].valueAsText)
-        image_height_pt = parameters[3].value
-        scale = _resolve_reference_scale(parameters[4].value)
+        params = _by_name(parameters)
+        in_photos = params["in_photos"].valueAsText
+        out_callouts = params["out_callouts"].valueAsText
+        arrangement = ARRANGEMENT_LABELS.get(
+            params["arrangement"].valueAsText,
+            params["arrangement"].valueAsText)
+        aspect = SHAPE_LABELS.get(params["picture_shape"].valueAsText)
+        image_height_pt = params["image_height"].value
+        scale = _resolve_reference_scale(params["reference_scale"].value)
 
         photos = _read_photo_points(in_photos)
         if not photos:
@@ -180,7 +208,7 @@ class CreatePhotoCallouts:
         image_folder = _image_folder_for(out_callouts)
         os.makedirs(image_folder, exist_ok=True)
         arcpy.AddMessage("Saving pictures to {}".format(image_folder))
-        photos = _extract_images(in_photos, photos, image_folder)
+        photos = _extract_images(in_photos, photos, image_folder, aspect)
         if not photos:
             arcpy.AddError(
                 "None of the photos could be read. Run Geotagged Photos To "
@@ -195,7 +223,7 @@ class CreatePhotoCallouts:
         sizes = [(height * p["aspect"], height) for p in photos]
         extent = None
         if arrangement == callout_layout.EDGES:
-            extent = _picture_area(parameters[5].value, sr)
+            extent = _picture_area(params["picture_area"].value, sr)
         centres = callout_layout.arrange_images(
             anchors, sizes, arrangement, extent=extent)
         if extent is not None:
@@ -213,8 +241,10 @@ class CreatePhotoCallouts:
 
     def postExecute(self, parameters):
         """Style the output layer once ArcGIS Pro has added it to the map."""
-        _style_output(parameters[1].valueAsText, parameters[3].value,
-                      parameters[4].value)
+        params = _by_name(parameters)
+        _style_output(params["out_callouts"].valueAsText,
+                      params["image_height"].value,
+                      params["reference_scale"].value)
         return
 
 
@@ -265,12 +295,14 @@ class StylePhotoCallouts:
         return
 
     def updateMessages(self, parameters):
-        _check_positive(parameters[1], "Image height")
-        _check_positive(parameters[2], "Reference scale")
+        params = _by_name(parameters)
+        _check_positive(params["image_height"], "Image height")
+        _check_positive(params["reference_scale"], "Reference scale")
         return
 
     def execute(self, parameters, messages):
-        layer = _find_map_layer(parameters[0].valueAsText)
+        params = _by_name(parameters)
+        layer = _find_map_layer(params["in_callouts"].valueAsText)
         if layer is None:
             arcpy.AddError("Run this tool from ArcGIS Pro with the callouts "
                            "layer in the active map.")
@@ -284,18 +316,19 @@ class StylePhotoCallouts:
             raise arcpy.ExecuteError
         arcpy.AddMessage("Found pictures for {} callouts. They are drawn when "
                          "the tool finishes.".format(len(pictures)))
-        parameters[3].value = parameters[0].value
+        params["out_callouts"].value = params["in_callouts"].value
         return
 
     def postExecute(self, parameters):
         """Draw the pictures. This has to happen here, after ArcGIS Pro has
         put the tool's output layer back in the map: changes made in execute
         are replaced by Pro's copy of the layer when the tool finishes."""
+        params = _by_name(parameters)
         try:
-            layer = _find_map_layer(parameters[0].valueAsText)
+            layer = _find_map_layer(params["in_callouts"].valueAsText)
             if layer is not None:
-                _apply_callout_symbology(layer, parameters[1].value,
-                                         parameters[2].value)
+                _apply_callout_symbology(layer, params["image_height"].value,
+                                         params["reference_scale"].value)
         except Exception as error:
             arcpy.AddWarning("Could not draw the pictures: {}".format(error))
         return
@@ -507,10 +540,11 @@ def _read_attachments(table, photos):
     return found
 
 
-def _extract_images(in_photos, photos, image_folder):
-    """Save an upright thumbnail of each photo. Uses the photo attached to
-    the point if there is one, otherwise the file in the Path field.
-    Returns the photos that have a picture."""
+def _extract_images(in_photos, photos, image_folder, aspect=None):
+    """Save an upright thumbnail of each photo, cropped to `aspect` (width /
+    height) if given. Uses the photo attached to the point if there is one,
+    otherwise the file in the Path field. Returns the photos that have a
+    picture."""
     attached = {}
     table = _attachment_table(in_photos)
     if table:
@@ -529,7 +563,8 @@ def _extract_images(in_photos, photos, image_folder):
         out_path = os.path.join(image_folder,
                                 "{}_{}.png".format(photo["oid"], safe))
         try:
-            width, height = callout_layout.make_thumbnail(source, out_path)
+            width, height = callout_layout.make_thumbnail(
+                source, out_path, aspect=aspect)
         except Exception as error:
             arcpy.AddWarning("Could not read the picture for {}: {}".format(
                 photo["name"], error))

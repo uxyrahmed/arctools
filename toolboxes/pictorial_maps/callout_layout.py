@@ -55,12 +55,29 @@ def is_image_attachment(name, content_type):
 # ---------------------------------------------------------------------------
 
 
-def make_thumbnail(source, out_path, max_pixels=THUMBNAIL_PIXELS):
+def crop_box(width, height, aspect):
+    """The largest box in the middle of a width x height image whose
+    width / height is `aspect`, as (left, top, right, bottom)."""
+    if width > height * aspect:
+        new_width = max(1, int(round(height * aspect)))
+        left = (width - new_width) // 2
+        return (left, 0, left + new_width, height)
+    new_height = max(1, int(round(width / aspect)))
+    top = (height - new_height) // 2
+    return (0, top, width, top + new_height)
+
+
+def make_thumbnail(source, out_path, max_pixels=THUMBNAIL_PIXELS,
+                   aspect=None):
     """Write a framed, upright PNG thumbnail of a photo.
 
     `source` is a file path or the photo's bytes. Phone photos are often stored
     sideways with an EXIF tag saying how to rotate them; ArcGIS picture markers
     ignore that tag, so the rotation is applied to the pixels here.
+
+    `aspect` is the width / height to crop the photo to, keeping its middle
+    (0.75 for 3:4 portrait, 4 / 3 for 4:3 landscape). None keeps the whole
+    photo.
 
     Returns the (width, height) of the thumbnail in pixels.
     """
@@ -71,6 +88,8 @@ def make_thumbnail(source, out_path, max_pixels=THUMBNAIL_PIXELS):
 
     with Image.open(source) as photo:
         photo = ImageOps.exif_transpose(photo).convert("RGB")
+        if aspect:
+            photo = photo.crop(crop_box(photo.width, photo.height, aspect))
         resample = getattr(Image, "Resampling", Image).LANCZOS
         photo.thumbnail((max_pixels, max_pixels), resample)
 

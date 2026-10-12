@@ -432,6 +432,43 @@ class TestThumbnail(unittest.TestCase):
         url = cl.image_data_url(out)
         self.assertTrue(url.startswith("data:image/png;base64,iVBORw0KGgo"))
 
+    def photo_shape(self, aspect):
+        """Width / height of the photo inside the thumbnail's frame."""
+        out = os.path.join(self.tmp.name, "thumb.png")
+        width, height = cl.make_thumbnail(self.sideways_photo_bytes(), out,
+                                          max_pixels=200, aspect=aspect)
+        frame = 2 * (max(3, round(200 * 0.03)) + 1)
+        return (width - frame) / float(height - frame)
+
+    def test_crops_a_portrait_photo_to_landscape(self):
+        # The sample photo is 3:4 portrait once turned upright.
+        self.assertAlmostEqual(self.photo_shape(4.0 / 3.0), 4.0 / 3.0,
+                               places=1)
+
+    def test_portrait_photo_stays_portrait(self):
+        self.assertAlmostEqual(self.photo_shape(0.75), 0.75, places=1)
+        self.assertAlmostEqual(self.photo_shape(None), 0.75, places=1)
+
+
+class TestCropBox(unittest.TestCase):
+    def test_portrait_to_landscape_keeps_the_middle(self):
+        # An upright iPhone photo cropped to 4:3.
+        self.assertEqual(cl.crop_box(3024, 4032, 4.0 / 3.0),
+                         (0, 882, 3024, 882 + 2268))
+
+    def test_landscape_to_portrait_keeps_the_middle(self):
+        self.assertEqual(cl.crop_box(4032, 3024, 0.75),
+                         (882, 0, 882 + 2268, 3024))
+
+    def test_already_the_right_shape(self):
+        self.assertEqual(cl.crop_box(3024, 4032, 0.75), (0, 0, 3024, 4032))
+        self.assertEqual(cl.crop_box(4032, 3024, 4.0 / 3.0),
+                         (0, 0, 4032, 3024))
+
+    def test_square(self):
+        self.assertEqual(cl.crop_box(100, 100, 4.0 / 3.0), (0, 12, 100, 87))
+        self.assertEqual(cl.crop_box(100, 100, 0.75), (12, 0, 87, 100))
+
 
 if __name__ == "__main__":
     unittest.main()
