@@ -7,7 +7,8 @@ A collection of toolboxes and tools for ArcGIS Pro.
 ```
 arctools/
 ├── toolboxes/        # Toolboxes you can add to an ArcGIS Pro project
-│   └── _template/    # Starter Python toolbox (.pyt) to copy for new tools
+│   ├── _template/    # Starter Python toolbox (.pyt) to copy for new tools
+│   └── pictorial_maps/  # Pictorial Maps toolbox (photo callouts)
 ├── scripts/          # Standalone arcpy scripts that run outside a toolbox
 └── data/
     └── images/       # Photos used as input data for the tools
@@ -48,4 +49,4 @@ your clone of this repository instead.
 
 | Toolbox | Description |
 | ------- | ----------- |
-| [Pictorial Maps](toolboxes/pictorial_maps/) | Shows geotagged photos on the map, each joined to where it was taken by a leader line that stays attached when the photo is moved. |
+| [Pictorial Maps](toolboxes/pictorial_maps/) | Shows geotagged photos on the map, each joined to where it was taken by a leader line that stays attached when the photo is moved. **Create Photo Callouts** makes the callouts from the output of Geotagged Photos To Points, with a Picture Shape option (Original, 3:4 or 4:3) and the callouts kept out of layout legends. **Style Photo Callouts** redraws the pictures, for example at a new size. See the [toolbox README](toolboxes/pictorial_maps/README.md) for the workflow and every parameter. |
