@@ -7,7 +7,8 @@ A collection of toolboxes and tools for ArcGIS Pro.
 ```
 arctools/
 ├── toolboxes/        # Toolboxes you can add to an ArcGIS Pro project
-│   └── _template/    # Starter Python toolbox (.pyt) to copy for new tools
+│   ├── _template/    # Starter Python toolbox (.pyt) to copy for new tools
+│   └── survey_location_map/  # Survey Location Map toolbox (survey KMZ to map layout)
 ├── scripts/          # Standalone arcpy scripts that run outside a toolbox
 └── data/
     └── images/       # Photos used as input data for the tools
@@ -48,4 +49,4 @@ your clone of this repository instead.
 
 | Toolbox | Description |
 | ------- | ----------- |
-| _None yet_ | |
+| [Survey Location Map](toolboxes/survey_location_map/) | Turns a survey KMZ into a Survey Location Map. **Import Survey KMZ** splits the survey points into one feature class per survey with Name, X and Y; **Draw Transect Lines** draws a 50 m line from each transect point in the direction in its name; **Connect Data to Layout** and **Restyle Layout** point the master layout at the new data, hide the surveys that aren't there and stack the tables to fit. **Make Survey Map** runs all four. See the [toolbox README](toolboxes/survey_location_map/README.md) for the workflow and the names the master layout needs. |
