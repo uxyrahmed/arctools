@@ -44,6 +44,15 @@ your clone of this repository instead.
    right-click it in the Catalog pane and choose **Refresh** to reload it.
 5. Add a short entry for it in the table below.
 
+Every pull request runs `scripts/check_toolboxes.py`, which checks that each
+`.pyt` compiles and has a `Toolbox` class with `label`, `alias` and a `tools`
+list of tool classes that define `getParameterInfo` and `execute`. It does not
+need `arcpy`, so you can run it locally with any Python 3:
+
+```
+python scripts/check_toolboxes.py
+```
+
 ## Toolboxes
 
 | Toolbox | Description |
