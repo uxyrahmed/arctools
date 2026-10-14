@@ -1,0 +1,18 @@
+name: Check toolboxes
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # ArcGIS Pro 3.x ships Python 3.11
+          python-version: "3.11"
+      - name: Check every .pyt under toolboxes/
+        run: python scripts/check_toolboxes.py
