@@ -11,17 +11,26 @@ import sys
 
 import arcpy
 
+# ArcGIS Pro keeps Python running between tool runs, so the surveymap package
+# from an earlier load can still be in memory: an older copy, or one from
+# another folder. Drop it and load the package next to this file, fresh, so
+# a new copy of the toolbox works as soon as the toolbox is refreshed.
 _HERE = os.path.dirname(os.path.abspath(__file__))
-if _HERE not in sys.path:
-    sys.path.insert(0, _HERE)
-from surveymap import (  # noqa: E402
-    directions, gis, kmz, layouts, messages, stacking, surveys, transects,
-)
-
-# ArcGIS Pro keeps imported modules loaded between runs. Reload so edits to
-# the surveymap package are picked up when the toolbox is refreshed.
-for _module in (surveys, messages, directions, stacking, gis, kmz, transects, layouts):
-    importlib.reload(_module)
+sys.path[:] = [path for path in sys.path if os.path.normcase(path) != os.path.normcase(_HERE)]
+sys.path.insert(0, _HERE)
+for _name in [name for name in sys.modules if name.split(".")[0] == "surveymap"]:
+    del sys.modules[_name]
+importlib.invalidate_caches()
+try:
+    from surveymap import (  # noqa: E402
+        directions, gis, kmz, layouts, messages, stacking, surveys, transects,
+    )
+except ImportError as error:
+    raise ImportError(
+        f"{error}. The surveymap folder next to this toolbox needs all of its "
+        "files. Unzip the whole toolbox again into an empty folder, then "
+        "restart ArcGIS Pro."
+    ) from error
 
 SPREAD_EVENLY = "Spread evenly"
 STACK_FROM_TOP = "Stack from top"

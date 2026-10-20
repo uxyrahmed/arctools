@@ -191,9 +191,10 @@ To rename an element, select it in the layout's Contents pane and press F2.
   `surveymap/stacking.py` are the numbers to adjust.
 - The survey map is the one shown in the map frame with the most survey
   layers, so other maps in the layout (location maps, mini map) don't matter.
-- ArcGIS Pro keeps Python modules loaded, so the toolbox reloads `surveymap`
-  whenever ArcGIS Pro loads it. After editing the code, right-click the
-  toolbox in the Catalog pane and choose **Refresh**.
+- ArcGIS Pro keeps Python modules loaded, so the toolbox drops any
+  `surveymap` already in memory and loads the copy next to it whenever
+  ArcGIS Pro loads it. After editing the code or unzipping a new copy,
+  right-click the toolbox in the Catalog pane and choose **Refresh**.
 - The code is written for ArcGIS Pro 3.0 and later (Python 3.9 and up).
 
 ## Tests
