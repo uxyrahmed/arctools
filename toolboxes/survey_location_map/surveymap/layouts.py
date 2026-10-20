@@ -7,6 +7,7 @@ the names the master layout needs.
 """
 
 import copy
+import json
 import os
 
 import arcpy
@@ -14,6 +15,7 @@ import arcpy
 from . import gis, stacking, surveys
 
 TABLE_FIELDS = ("Name", "X", "Y")
+XY_FIELDS = ("x", "y")
 
 
 # --- Finding things ---------------------------------------------------------
@@ -156,7 +158,7 @@ def connect_data(layout_name, gdb, present=None):
     present = _surveys_to_show(gdb, present)
     arcpy.AddMessage(f"Survey map: '{frame.map.name}', shown in map frame '{frame.name}'.")
 
-    connected, turned_off, failed = [], [], []
+    connected, turned_off, failed, decimals = [], [], [], {}
     for survey in surveys.SURVEYS:
         layer = layers.get(survey.code)
         if layer is None:
@@ -176,6 +178,10 @@ def connect_data(layout_name, gdb, present=None):
             continue
         with gis.carry_on(f"set the labels on '{survey.layer_name}'"):
             _set_labels(layer, survey)
+        if survey.is_point:
+            decimals[survey.code] = _xy_decimals(os.path.join(gdb, survey.feature_class))
+            with gis.carry_on(f"set how '{survey.layer_name}' shows X and Y"):
+                _set_xy_format(layer, decimals[survey.code])
         connected.append(f"{survey.layer_name} ({present[survey.code]})")
     for code in failed:
         del present[code]
@@ -199,6 +205,8 @@ def connect_data(layout_name, gdb, present=None):
                     table.mapFrame = frame.name
                     table.mapMemberURI = layer.getDefinition("V3").uRI
                     _set_table_fields(table)
+                with gis.carry_on(f"set the X and Y decimals in {survey.table_name}"):
+                    _set_table_decimals(table, decimals.get(survey.code, surveys.XY_DECIMALS))
         layout.setDefinition(definition)
 
     if connected:
@@ -292,6 +300,43 @@ def _fill_symbol(rgb):
     return symbol
 
 
+def _xy_decimals(path):
+    """Decimal places to show X and Y with: 6 when they're in degrees."""
+    try:
+        with arcpy.da.SearchCursor(path, ["X"]) as rows:
+            for (x,) in rows:
+                if x is not None:
+                    return surveys.XY_DECIMALS_DEGREES if abs(x) <= 180 else surveys.XY_DECIMALS
+    except Exception:
+        pass
+    return surveys.XY_DECIMALS
+
+
+def _number_format(decimals):
+    """Exactly decimals places, so 281308 shows as 281308.00."""
+    number_format = arcpy.cim.CreateCIMObjectFromClassName("CIMNumericFormat", "V3")
+    number_format.roundingOption = "esriRoundNumberOfDecimals"
+    number_format.roundingValue = decimals
+    number_format.zeroPad = True
+    number_format.useSeparator = False
+    return number_format
+
+
+def _set_xy_format(layer, decimals):
+    """Show X and Y to decimals places in the layer's attribute table and
+    pop-ups. The master's layers keep formats from older data, with 3 or 6
+    places and no zero padding."""
+    definition = layer.getDefinition("V3")
+    table = getattr(definition, "featureTable", None)
+    changed = False
+    for description in getattr(table, "fieldDescriptions", None) or []:
+        if surveys.normalise(getattr(description, "fieldName", None)) in XY_FIELDS:
+            description.numberFormat = _number_format(decimals)
+            changed = True
+    if changed:
+        layer.setDefinition(definition)
+
+
 def _set_table_fields(table):
     """Make the table show Name, X and Y, in that order, and nothing else."""
     fields = list(table.fields or [])
@@ -307,6 +352,17 @@ def _set_table_fields(table):
         field.isVisible = True
         ordered.append(field)
     table.fields = ordered
+
+
+def _set_table_decimals(table, decimals):
+    """Show X and Y in the table to exactly decimals places. Without this the
+    table uses the layer's format, so 281308.0 showed as 281308 next to
+    278648.612."""
+    fields = list(table.fields or [])
+    for field in fields:
+        if surveys.normalise(field.name) in XY_FIELDS:
+            field.numberFormat = _number_format(decimals)
+    table.fields = fields
 
 
 def _new_table_field(table, name):
@@ -541,16 +597,46 @@ def _anchor_name(value):
     return str(value).split(".")[-1]
 
 
+def _geometry_dict(geometry):
+    """A CIM geometry as an Esri JSON dict, or None. ArcGIS Pro hands most
+    back as dicts, but ones saved with a spatial reference (as some of the
+    master's tables are) come back as geometry objects."""
+    if geometry is None or isinstance(geometry, dict):
+        return geometry
+    try:
+        text = getattr(geometry, "JSON", None)
+        if isinstance(text, str):
+            return json.loads(text)
+    except Exception:
+        pass
+    for attribute in ("rings", "paths"):
+        parts = getattr(geometry, attribute, None)
+        if parts:
+            return {attribute: parts}
+    x, y = getattr(geometry, "x", None), getattr(geometry, "y", None)
+    if x is not None and y is not None:
+        return {"x": x, "y": y}
+    try:
+        e = geometry.extent
+        corners = [[e.XMin, e.YMin], [e.XMin, e.YMax], [e.XMax, e.YMax], [e.XMax, e.YMin]]
+        return {"rings": [corners + corners[:1]]}
+    except Exception:
+        return None
+
+
 def _points(geometry):
-    if geometry is None:
+    geometry = _geometry_dict(geometry)
+    if not geometry:
         return []
-    if isinstance(geometry, dict):
-        if "x" in geometry and "y" in geometry:
-            return [(geometry["x"], geometry["y"])]
-        parts = geometry.get("rings") or geometry.get("paths") or []
-    else:
-        parts = getattr(geometry, "rings", None) or getattr(geometry, "paths", None) or []
-    return [(point[0], point[1]) for part in parts for point in part]
+    if geometry.get("x") is not None and geometry.get("y") is not None:
+        return [(geometry["x"], geometry["y"])]
+    parts = geometry.get("rings") or geometry.get("paths") or []
+    return [
+        (point[0], point[1])
+        for part in parts
+        for point in part
+        if isinstance(point, (list, tuple)) and len(point) >= 2
+    ]
 
 
 def _bounds(element):
@@ -570,24 +656,22 @@ def _bounds(element):
 
 
 def _set_frame(element, left, bottom, right, top):
+    """Move and size an element. The frame and rotation centre are written
+    as dicts even when ArcGIS Pro handed them over as geometry objects; the
+    dict form is the one that works for every table."""
     rings = [[[left, bottom], [left, top], [right, top], [right, bottom], [left, bottom]]]
-    frame = element.frame
-    if isinstance(frame, dict):
-        frame = dict(frame)
-        frame["rings"] = rings
-        element.frame = frame
-    else:
-        frame.rings = rings
+    frame = getattr(element, "frame", None)
+    frame = dict(frame) if isinstance(frame, dict) else {}
+    frame["rings"] = rings
+    element.frame = frame
     # ArcGIS Pro keeps the rotation centre on the element's anchor.
     anchor = _anchor_name(getattr(element, "anchor", None))
     x, y = stacking.anchor_point(anchor, left, bottom, right - left, top - bottom)
     centre = getattr(element, "rotationCenter", None)
-    if isinstance(centre, dict):
-        centre = dict(centre)
+    if centre is not None:
+        centre = dict(centre) if isinstance(centre, dict) else {}
         centre.update(x=x, y=y)
         element.rotationCenter = centre
-    elif centre is not None:
-        centre.x, centre.y = x, y
 
 
 def _warn_missing(what, names):

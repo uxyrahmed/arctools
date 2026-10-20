@@ -67,9 +67,9 @@ TRANSECT_LINES = "T_LINES"
 # Default length of a transect line, in metres.
 TRANSECT_LENGTH_M = 50.0
 
-# Decimal places kept in the X and Y fields: millimetres in a projected
-# coordinate system, about 10 cm in degrees.
-XY_DECIMALS = 3
+# Decimal places kept in the X and Y fields, and shown in the tables:
+# centimetres in a projected coordinate system, about 10 cm in degrees.
+XY_DECIMALS = 2
 XY_DECIMALS_DEGREES = 6
 
 # Default coordinate system for X and Y, and for drawing transect lines:

@@ -72,8 +72,9 @@ Transect names hold the ID, the direction and usually the depth, for example
 
 X and Y default to WGS 1984 UTM Zone 43N, or 43S when the points are south of
 the equator. Choose another coordinate system in **Coordinate System for X and
-Y**. Values are rounded to 3 decimal places (6 for degrees). The features
-themselves stay in WGS 1984, like the KMZ.
+Y**. Values are rounded to 2 decimal places (6 for degrees), and the tables
+and the layers' attribute tables show them with exactly that many, so 281308
+shows as 281308.00. The features themselves stay in WGS 1984, like the KMZ.
 
 ## Parameters
 
