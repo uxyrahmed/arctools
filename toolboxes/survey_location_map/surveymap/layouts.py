@@ -261,6 +261,12 @@ def _set_labels(layer, survey):
     label = classes[0]
     label.expressionEngine = "Arcade"
     label.expression = "$feature.Name"
+    # A SQL query or scale range left on the label class would hide labels.
+    # Layers first made from KML often have the query "LabelID" = 0, and the
+    # survey data has no LabelID field, so those points went unlabelled.
+    label.whereClause = ""
+    label.minimumScale = 0
+    label.maximumScale = 0
     label.visibility = True
     text = label.textSymbol.symbol
     text.fontFamilyName = surveys.LABEL_FONT
