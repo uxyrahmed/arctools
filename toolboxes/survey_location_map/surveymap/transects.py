@@ -3,14 +3,15 @@
 
 import arcpy
 
-from . import directions, gis, surveys
+from . import directions, gis, messages, surveys
 
 
 def draw_transect_lines(in_points, out_lines, length_m=surveys.TRANSECT_LENGTH_M,
                         coordinate_system=None):
     """Draw a line length_m long from each point in in_points, in the compass
     direction in its name ('T201 S 2m' goes south). Points with no direction in
-    their name get no line.
+    their name get no line, and a point whose line can't be drawn is skipped
+    with a warning.
 
     Lines are worked out in coordinate_system if it is projected, otherwise in
     WGS 1984 UTM Zone 43N (or 43S south of the equator), and saved in the
@@ -19,10 +20,15 @@ def draw_transect_lines(in_points, out_lines, length_m=surveys.TRANSECT_LENGTH_M
     if length_m is None or length_m <= 0:
         raise surveys.SurveyMapError("The line length must be more than 0 metres.")
 
-    source_sr = arcpy.Describe(in_points).spatialReference
-    name_field = _name_field(in_points)
-    with arcpy.da.SearchCursor(in_points, [name_field, "SHAPE@"]) as rows:
-        points = [(name or "", geometry) for name, geometry in rows if geometry is not None]
+    try:
+        source_sr = arcpy.Describe(in_points).spatialReference
+        name_field = _name_field(in_points)
+        with arcpy.da.SearchCursor(in_points, [name_field, "SHAPE@"]) as rows:
+            points = [(name or "", geometry) for name, geometry in rows if geometry is not None]
+    except surveys.SurveyMapError:
+        raise
+    except Exception as error:
+        raise surveys.SurveyMapError(messages.problem(error, "read the transect points")) from error
 
     if coordinate_system is not None and coordinate_system.type == "Projected":
         work_sr = coordinate_system
@@ -43,13 +49,14 @@ def draw_transect_lines(in_points, out_lines, length_m=surveys.TRANSECT_LENGTH_M
         if bearing is None:
             no_direction.append(name or "(no name)")
             continue
-        start = gis.project(geometry, work_sr).firstPoint
-        end_x, end_y = directions.offset(start.X, start.Y, bearing, distance)
-        line = arcpy.Polyline(
-            arcpy.Array([arcpy.Point(start.X, start.Y), arcpy.Point(end_x, end_y)]),
-            work_sr,
-        )
-        lines.append((name, gis.project(line, source_sr)))
+        with gis.carry_on(f"draw the line for {name}", so="that point has no line"):
+            start = gis.project(geometry, work_sr).firstPoint
+            end_x, end_y = directions.offset(start.X, start.Y, bearing, distance)
+            line = arcpy.Polyline(
+                arcpy.Array([arcpy.Point(start.X, start.Y), arcpy.Point(end_x, end_y)]),
+                work_sr,
+            )
+            lines.append((name, gis.project(line, source_sr)))
     lines.sort(key=lambda feature: surveys.natural_key(feature[0]))
 
     gis.write_features(out_lines, surveys.POLYLINE, source_sr, lines)

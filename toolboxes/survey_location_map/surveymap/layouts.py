@@ -74,11 +74,14 @@ def survey_layers(map_):
     wanted = {surveys.normalise(survey.layer_name): survey for survey in surveys.SURVEYS}
     found = {}
     for layer in map_.listLayers():
-        survey = wanted.get(surveys.normalise(layer.name))
-        if survey is None or survey.code in found:
-            continue
-        if layer.isFeatureLayer or _cim_type(layer.getDefinition("V3")) == "CIMFeatureLayer":
-            found[survey.code] = layer
+        try:
+            survey = wanted.get(surveys.normalise(layer.name))
+            if survey is None or survey.code in found:
+                continue
+            if layer.isFeatureLayer or _cim_type(layer.getDefinition("V3")) == "CIMFeatureLayer":
+                found[survey.code] = layer
+        except Exception:
+            continue  # A layer that can't be read isn't one the tools can use.
     return found
 
 
@@ -86,13 +89,16 @@ def find_survey_map_frame(layout):
     """The map frame showing the map with the most survey layers in it."""
     best_key = best = None
     for frame in layout.listElements("MAPFRAME_ELEMENT"):
-        map_ = frame.map
-        if map_ is None:
-            continue
-        found = len(survey_layers(map_))
-        if not found:
-            continue
-        key = (found, bool(frame.visible), frame.elementWidth * frame.elementHeight)
+        try:
+            map_ = frame.map
+            if map_ is None:
+                continue
+            found = len(survey_layers(map_))
+            if not found:
+                continue
+            key = (found, bool(frame.visible), frame.elementWidth * frame.elementHeight)
+        except Exception:
+            continue  # A frame that can't be read isn't showing the survey map.
         if best_key is None or key > best_key:
             best_key, best = key, frame
     if best is None:
@@ -109,63 +115,96 @@ def present_surveys(gdb):
     counts = {}
     for survey in surveys.SURVEYS:
         path = os.path.join(gdb, survey.feature_class)
-        if arcpy.Exists(path):
-            count = gis.count(path)
-            if count:
-                counts[survey.code] = count
+        with gis.carry_on(f"count the features in {survey.feature_class}",
+                          so="it's left off the map"):
+            if arcpy.Exists(path):
+                count = gis.count(path)
+                if count:
+                    counts[survey.code] = count
     return counts
+
+
+def _surveys_to_show(gdb, present):
+    """The surveys to show: present (survey code -> feature count) when the
+    all-in-one tool passes on what it just made, otherwise what's in gdb."""
+    present = present_surveys(gdb) if present is None else dict(present)
+    if not present:
+        raise surveys.SurveyMapError(
+            f"There's no survey data to map in {gdb}. Check that Step 1 Import "
+            "Survey KMZ found survey points in the KMZ."
+        )
+    return present
 
 
 # --- Step 3: connect the data -----------------------------------------------
 
 
-def connect_data(layout_name, gdb):
+def connect_data(layout_name, gdb, present=None):
     """Point each survey layer in the layout's map at its feature class in gdb,
     link each survey's table to its layer and set the point labels. Surveys
-    with no data are turned off."""
+    with no data are turned off.
+
+    present (survey code -> feature count) says which surveys to connect; it
+    defaults to the ones with data in gdb. A layer or table that can't be
+    changed is skipped with a warning. Returns the surveys now on the map, as
+    survey code -> feature count.
+    """
     gdb = check_geodatabase(gdb)
     layout = get_layout(current_project(), layout_name)
     frame = find_survey_map_frame(layout)
     layers = survey_layers(frame.map)
-    present = present_surveys(gdb)
-    if not present:
-        raise surveys.SurveyMapError(
-            f"There's no survey data in {gdb}. Run Step 1 Import Survey KMZ first."
-        )
+    present = _surveys_to_show(gdb, present)
     arcpy.AddMessage(f"Survey map: '{frame.map.name}', shown in map frame '{frame.name}'.")
 
-    connected, turned_off = [], []
+    connected, turned_off, failed = [], [], []
     for survey in surveys.SURVEYS:
         layer = layers.get(survey.code)
         if layer is None:
             continue
-        if survey.code in present:
-            _set_data_source(layer, gdb, survey.feature_class)
-            _set_labels(layer, survey)
-            layer.visible = True
-            connected.append(f"{survey.layer_name} ({present[survey.code]})")
-        else:
-            layer.visible = False
+        if survey.code not in present:
+            with gis.carry_on(f"turn off '{survey.layer_name}'"):
+                layer.visible = False
             turned_off.append(survey.layer_name)
+            continue
+        with gis.carry_on(f"connect '{survey.layer_name}' to {survey.feature_class}",
+                          so="the layer is turned off") as outcome:
+            _set_data_source(layer, gdb, survey.feature_class)
+            layer.visible = True
+        if not outcome.ok:
+            failed.append(survey.code)
+            _turn_off(layer)
+            continue
+        with gis.carry_on(f"set the labels on '{survey.layer_name}'"):
+            _set_labels(layer, survey)
+        connected.append(f"{survey.layer_name} ({present[survey.code]})")
+    for code in failed:
+        del present[code]
+    if failed and not connected:
+        raise surveys.SurveyMapError(
+            "None of the survey layers could be connected to the new data, so "
+            "the tool stopped. The warnings above say why."
+        )
 
-    definition = layout.getDefinition("V3")
-    tables = _elements_by_name(definition, "CIMTableFrame")
     missing_tables = []
-    for survey in surveys.point_surveys():
-        table = tables.get(surveys.normalise(survey.table_name))
-        layer = layers.get(survey.code)
-        if table is None:
-            missing_tables.append(survey.table_name)
-        elif layer is not None:
-            table.mapFrame = frame.name
-            table.mapMemberURI = layer.getDefinition("V3").uRI
-            _set_table_fields(table)
-    layout.setDefinition(definition)
+    with gis.carry_on("link the tables to their layers", so="they keep their old links"):
+        definition = layout.getDefinition("V3")
+        tables = _elements_by_name(definition, "CIMTableFrame")
+        for survey in surveys.point_surveys():
+            table = tables.get(surveys.normalise(survey.table_name))
+            layer = layers.get(survey.code)
+            if table is None:
+                missing_tables.append(survey.table_name)
+            elif layer is not None:
+                with gis.carry_on(f"link {survey.table_name} to '{survey.layer_name}'"):
+                    table.mapFrame = frame.name
+                    table.mapMemberURI = layer.getDefinition("V3").uRI
+                    _set_table_fields(table)
+        layout.setDefinition(definition)
 
     if connected:
         arcpy.AddMessage("Connected: " + "; ".join(connected))
     if turned_off:
-        arcpy.AddMessage("Turned off, not in this KMZ: " + "; ".join(turned_off))
+        arcpy.AddMessage("Turned off, no data to show: " + "; ".join(turned_off))
     lost = [s.layer_name for s in surveys.SURVEYS if s.code in present and s.code not in layers]
     if lost:
         arcpy.AddWarning(
@@ -174,6 +213,14 @@ def connect_data(layout_name, gdb):
             "master layout with exactly these names."
         )
     _warn_missing("tables", missing_tables)
+    return present
+
+
+def _turn_off(layer):
+    try:
+        layer.visible = False
+    except Exception:
+        pass
 
 
 def _set_data_source(layer, gdb, feature_class):
@@ -273,128 +320,136 @@ def _new_table_field(table, name):
 # --- Step 4: restyle the layout ---------------------------------------------
 
 
-def restyle_layout(layout_name, gdb, spread=False):
+def restyle_layout(layout_name, gdb, spread=False, present=None):
     """Hide the layers, tables, headings and legend entries of surveys with no
     data, size each table to its rows and stack the tables in the tables
-    panel."""
+    panel.
+
+    present (survey code -> feature count) says which surveys to show; it
+    defaults to the ones with data in gdb. Anything that can't be changed is
+    skipped with a warning.
+    """
     gdb = check_geodatabase(gdb)
     layout = get_layout(current_project(), layout_name)
     frame = find_survey_map_frame(layout)
     layers = survey_layers(frame.map)
-    present = present_surveys(gdb)
-    if not present:
-        raise surveys.SurveyMapError(
-            f"There's no survey data in {gdb}. Run Step 1 Import Survey KMZ first."
-        )
+    present = _surveys_to_show(gdb, present)
     points_per_unit = stacking.points_per_unit(layout.pageUnits)
 
     for code, layer in layers.items():
-        layer.visible = code in present
+        show = code in present
+        with gis.carry_on(f"{'show' if show else 'hide'} '{surveys.by_code(code).layer_name}'"):
+            layer.visible = show
 
+    shown = [
+        f"{s.code} ({surveys.plural(present[s.code], 'row')})"
+        for s in surveys.point_surveys() if s.code in present
+    ]
+    hidden = [s.code for s in surveys.point_surveys() if s.code not in present]
     headings = {surveys.normalise(s.heading_name): s for s in surveys.point_surveys()}
     texts = {
         surveys.normalise(element.name): element
         for element in layout.listElements("TEXT_ELEMENT")
     }
 
-    definition = layout.getDefinition("V3")
-    elements = list(_walk(definition.elements))
-    tables = {
-        surveys.normalise(e.name): e for e in elements if _cim_type(e) == "CIMTableFrame"
-    }
-    anchors = {
-        surveys.normalise(e.name): _anchor_name(getattr(e, "anchor", None)) for e in elements
-    }
-    panel_name = surveys.normalise(surveys.TABLES_PANEL_NAME)
-    panel_element = next((e for e in elements if surveys.normalise(e.name) == panel_name), None)
+    missing, anchors, heading_spots, panel = [], {}, {}, None
+    with gis.carry_on("resize and stack the tables", so="they're left as they were") as tables:
+        definition = layout.getDefinition("V3")
+        elements = list(_walk(definition.elements))
+        table_elements = {
+            surveys.normalise(e.name): e for e in elements if _cim_type(e) == "CIMTableFrame"
+        }
+        anchors = {
+            surveys.normalise(e.name): _anchor_name(getattr(e, "anchor", None)) for e in elements
+        }
+        panel_name = surveys.normalise(surveys.TABLES_PANEL_NAME)
+        panel_element = next((e for e in elements if surveys.normalise(e.name) == panel_name), None)
 
-    shown, hidden, missing, blocks = [], [], [], []
-    for survey in surveys.point_surveys():
-        table = tables.get(surveys.normalise(survey.table_name))
-        heading = texts.get(surveys.normalise(survey.heading_name))
-        if table is None:
-            missing.append(survey.table_name)
-        if heading is None:
-            missing.append(survey.heading_name)
-        if survey.code not in present:
-            hidden.append(survey.code)
-            if table is not None:
+        blocks = []
+        for survey in surveys.point_surveys():
+            table = table_elements.get(surveys.normalise(survey.table_name))
+            heading = texts.get(surveys.normalise(survey.heading_name))
+            if table is None:
+                missing.append(survey.table_name)
+            if heading is None:
+                missing.append(survey.heading_name)
+            if table is None:
+                continue
+            if survey.code not in present:
                 table.visible = False
-            continue
-        shown.append(f"{survey.code} ({surveys.plural(present[survey.code], 'row')})")
-        if table is None:
-            continue
-        table.visible = True
-        bounds = _bounds(table)
-        if bounds is None:
-            continue
-        block = stacking.Block(
-            heading.elementWidth if heading is not None else 0.0,
-            heading.elementHeight if heading is not None else 0.0,
-            bounds[2] - bounds[0],
-            _table_height_points(table, present[survey.code]) / points_per_unit,
-        )
-        blocks.append((bounds[3], survey, table, block))
-    # Keep the order the tables have in the layout, top to bottom.
-    blocks.sort(key=lambda item: -item[0])
+                continue
+            table.visible = True
+            with gis.carry_on(f"size {survey.table_name}", so="it's left as it was"):
+                bounds = _bounds(table)
+                if bounds is None:
+                    raise surveys.SurveyMapError(
+                        f"Couldn't find where {survey.table_name} is on the page."
+                    )
+                block = stacking.Block(
+                    heading.elementWidth if heading is not None else 0.0,
+                    heading.elementHeight if heading is not None else 0.0,
+                    bounds[2] - bounds[0],
+                    _table_height_points(table, present[survey.code]) / points_per_unit,
+                )
+                blocks.append((bounds[3], survey, table, block))
+        # Keep the order the tables have in the layout, top to bottom.
+        blocks.sort(key=lambda item: -item[0])
 
-    shown_layers = {
-        layers[code].getDefinition("V3").uRI for code in layers if code in present
-    }
-    for legend in (e for e in elements if _cim_type(e) == "CIMLegend"):
-        if getattr(legend, "mapFrame", None) != frame.name:
-            continue
-        for item in legend.items or []:
-            item.isVisible = getattr(item, "layer", None) in shown_layers
+        with gis.carry_on("update the legend"):
+            _update_legends(elements, frame, layers, present)
 
-    heading_spots = {}
-    panel = _bounds(panel_element) if panel_element is not None else None
-    if panel is None:
-        arcpy.AddWarning(
-            f"There's no rectangle called '{surveys.TABLES_PANEL_NAME}' in the "
-            "layout, so the tables were resized where they are instead of being "
-            "stacked."
-        )
-        for top, _survey, table, block in blocks:
-            left = _bounds(table)[0]
-            _set_frame(table, left, top - block.table_height, left + block.table_width, top)
-    else:
-        placements, scale = stacking.stack(
-            panel,
-            [block for _, _, _, block in blocks],
-            margin=surveys.PANEL_MARGIN_PT / points_per_unit,
-            heading_gap=surveys.HEADING_GAP_PT / points_per_unit,
-            group_gap=surveys.GROUP_GAP_PT / points_per_unit,
-            min_gap=surveys.MIN_GAP_PT / points_per_unit,
-            spread=spread,
-        )
-        for (_top, survey, table, _block), placement in zip(blocks, placements):
-            left, bottom, width, height = placement.table
-            _set_frame(table, left, bottom, left + width, bottom + height)
-            if placement.heading is not None:
-                heading_spots[survey.code] = placement.heading
-        if scale < 1.0:
+        panel = _bounds(panel_element) if panel_element is not None else None
+        if panel is None:
             arcpy.AddWarning(
-                f"The tables didn't all fit in '{surveys.TABLES_PANEL_NAME}', so "
-                f"they were squeezed to {scale:.0%} of their full height and ArcGIS "
-                "Pro will shrink their text to fit. If that's too small, make the "
-                "panel taller or the table text smaller in the master layout."
+                f"There's no rectangle called '{surveys.TABLES_PANEL_NAME}' in the "
+                "layout, so the tables were resized where they are instead of being "
+                "stacked."
             )
-        if placements and placements[-1].table[1] < panel[1] - 1e-6:
-            arcpy.AddWarning(
-                f"The tables run past the bottom of '{surveys.TABLES_PANEL_NAME}'."
+            for top, _survey, table, block in blocks:
+                left = _bounds(table)[0]
+                _set_frame(table, left, top - block.table_height, left + block.table_width, top)
+        else:
+            placements, scale = stacking.stack(
+                panel,
+                [block for _, _, _, block in blocks],
+                margin=surveys.PANEL_MARGIN_PT / points_per_unit,
+                heading_gap=surveys.HEADING_GAP_PT / points_per_unit,
+                group_gap=surveys.GROUP_GAP_PT / points_per_unit,
+                min_gap=surveys.MIN_GAP_PT / points_per_unit,
+                spread=spread,
             )
-    layout.setDefinition(definition)
+            for (_top, survey, table, _block), placement in zip(blocks, placements):
+                left, bottom, width, height = placement.table
+                _set_frame(table, left, bottom, left + width, bottom + height)
+                if placement.heading is not None:
+                    heading_spots[survey.code] = placement.heading
+            if scale < 1.0:
+                arcpy.AddWarning(
+                    f"The tables didn't all fit in '{surveys.TABLES_PANEL_NAME}', so "
+                    f"they were squeezed to {scale:.0%} of their full height and ArcGIS "
+                    "Pro will shrink their text to fit. If that's too small, make the "
+                    "panel taller or the table text smaller in the master layout."
+                )
+            if placements and placements[-1].table[1] < panel[1] - 1e-6:
+                arcpy.AddWarning(
+                    f"The tables run past the bottom of '{surveys.TABLES_PANEL_NAME}'."
+                )
+        layout.setDefinition(definition)
 
     # Headings are moved after the layout definition is saved, so the two
-    # don't overwrite each other.
+    # don't overwrite each other. If the tables couldn't be saved, the
+    # headings stay next to them.
     for element in layout.listElements("TEXT_ELEMENT"):
         survey = headings.get(surveys.normalise(element.name))
         if survey is None:
             continue
-        element.visible = survey.code in present
-        spot = heading_spots.get(survey.code)
-        if spot is not None:
+        show = survey.code in present
+        with gis.carry_on(f"{'show' if show else 'hide'} {survey.heading_name}"):
+            element.visible = show
+        spot = heading_spots.get(survey.code) if tables.ok else None
+        if spot is None:
+            continue
+        with gis.carry_on(f"move {survey.heading_name}", so="it's left where it was"):
             anchor = anchors.get(surveys.normalise(element.name)) or "BottomLeftCorner"
             x, y = stacking.anchor_point(
                 anchor, spot[0], spot[1], element.elementWidth, element.elementHeight
@@ -404,11 +459,23 @@ def restyle_layout(layout_name, gdb, spread=False):
 
     arcpy.AddMessage("Showing: " + ", ".join(shown))
     if hidden:
-        arcpy.AddMessage("Hidden, not in this KMZ: " + ", ".join(hidden))
-    if panel is not None:
+        arcpy.AddMessage("Hidden, no data to show: " + ", ".join(hidden))
+    if tables.ok and panel is not None:
         how = "spread evenly" if spread else "stacked from the top"
         arcpy.AddMessage(f"Tables {how} in '{surveys.TABLES_PANEL_NAME}'.")
     _warn_missing("tables and headings", missing)
+
+
+def _update_legends(elements, frame, layers, present):
+    """Show only the survey layers with data in the survey map's legends."""
+    shown_layers = {
+        layers[code].getDefinition("V3").uRI for code in layers if code in present
+    }
+    for legend in (e for e in elements if _cim_type(e) == "CIMLegend"):
+        if getattr(legend, "mapFrame", None) != frame.name:
+            continue
+        for item in legend.items or []:
+            item.isVisible = getattr(item, "layer", None) in shown_layers
 
 
 def _table_height_points(table, rows):

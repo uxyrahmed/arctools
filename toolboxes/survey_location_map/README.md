@@ -96,8 +96,10 @@ themselves stay in WGS 1984, like the KMZ.
 - **Survey KMZ**, **Output Folder**, **Geodatabase Name** and **Coordinate
   System for X and Y**, as above.
 - Writes the feature classes in [Surveys](#surveys), only for the surveys the
-  KMZ has. Feature classes left over from an earlier run that the new KMZ
-  doesn't have are deleted, including `T_Lines`, which Step 2 draws again.
+  KMZ has. Feature classes from an earlier run are emptied and filled again
+  rather than replaced, so running again works while the layout shows them.
+  Ones the new KMZ doesn't have are emptied, including `T_Lines`, which
+  Step 2 draws again.
 
 ### Step 2 Draw Transect Lines
 
@@ -131,6 +133,25 @@ themselves stay in WGS 1984, like the KMZ.
 - If the tables don't fit, they're all squeezed by the same amount and ArcGIS
   Pro shrinks their text to fit. The tool warns when that happens; make the
   panel taller or the table text smaller in the master layout.
+
+## When something goes wrong
+
+- A problem with one survey, layer, table or heading is a warning: the tool
+  skips that piece, says what it skipped and why, and carries on.
+- Data that's locked, for example open in another ArcGIS Pro window or being
+  synced by OneDrive, is tried again a couple of times before the tool gives
+  up on it.
+- **Make Survey Map (All in One)** stops only when it can't go on: Step 1
+  couldn't read the KMZ or write any survey data, or Step 3 couldn't find the
+  survey map or connect any layer. If Step 2 fails, it carries on without
+  transect lines. If Step 4 fails, the data is still on the map and you can
+  run Step 4 on its own.
+- Only what this run imported goes on the map. A survey that couldn't be
+  written is left off rather than shown with old data.
+- An unexpected error is one line, followed by **Details for
+  troubleshooting**. Send those details when reporting it.
+- The KMZ is converted in Windows' temporary folder, not the project folder,
+  so OneDrive doesn't hold it open.
 
 ## Master layout
 
@@ -177,9 +198,9 @@ To rename an element, select it in the layout's Contents pane and press F2.
 
 ## Tests
 
-The survey names, direction reading and table stacking code is in
-`surveymap/surveys.py`, `directions.py` and `stacking.py`, which don't need
-ArcGIS. Their tests run with any Python 3:
+The survey names, direction reading, table stacking and error message code
+is in `surveymap/surveys.py`, `directions.py`, `stacking.py` and
+`messages.py`, which don't need ArcGIS. Their tests run with any Python 3:
 
 ```
 python -m unittest discover -s toolboxes/survey_location_map/tests

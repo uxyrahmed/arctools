@@ -14,11 +14,13 @@ import arcpy
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
-from surveymap import directions, gis, kmz, layouts, stacking, surveys, transects  # noqa: E402
+from surveymap import (  # noqa: E402
+    directions, gis, kmz, layouts, messages, stacking, surveys, transects,
+)
 
 # ArcGIS Pro keeps imported modules loaded between runs. Reload so edits to
 # the surveymap package are picked up when the toolbox is refreshed.
-for _module in (surveys, directions, stacking, gis, kmz, transects, layouts):
+for _module in (surveys, messages, directions, stacking, gis, kmz, transects, layouts):
     importlib.reload(_module)
 
 SPREAD_EVENLY = "Spread evenly"
@@ -160,15 +162,25 @@ def _by_name(parameters):
 
 
 def _set_output(parameters, name, value):
-    names = [param.name for param in parameters]
-    arcpy.SetParameterAsText(names.index(name), value)
+    try:
+        names = [param.name for param in parameters]
+        arcpy.SetParameterAsText(names.index(name), value)
+    except Exception:
+        pass  # It only fills in the output parameter; the work is done.
 
 
 def _spatial_reference(param):
+    """The coordinate system chosen in param, or None to use the default. One
+    that can't be read gives a warning and the default."""
     try:
-        return gis.to_spatial_reference(param.value)
-    except Exception:
-        return gis.to_spatial_reference(param.valueAsText)
+        try:
+            return gis.to_spatial_reference(param.value)
+        except Exception:
+            return gis.to_spatial_reference(param.valueAsText)
+    except Exception as error:
+        gis.report(error, f"use the coordinate system in '{param.displayName}'",
+                   so="the default is used")
+        return None
 
 
 def _follow_kmz(kmz_param, name_param):
@@ -206,14 +218,35 @@ def _check_survey_gdb(param):
         param.setErrorMessage("Choose the file geodatabase (.gdb) that Step 1 made.")
 
 
-def _run(function, *args, **kwargs):
-    """Run a step, turning a SurveyMapError into a tool error message.
-    Returns (True, result), or (False, None) if the step failed."""
+def _run(function, *args, carry_on=False):
+    """Run one step. Returns (True, result), or (False, None) if it failed.
+
+    The problem is reported as an error, or as a warning when carry_on is True
+    and the tool keeps going without this step. Either way it's a message
+    saying what went wrong, not a Python traceback.
+    """
     try:
-        return True, function(*args, **kwargs)
-    except surveys.SurveyMapError as error:
-        arcpy.AddError(str(error))
+        return True, function(*args)
+    except Exception as error:
+        gis.report(error, warning=carry_on)
         return False, None
+
+
+class _ToolRun:
+    """Wraps a tool's execute: keeps the data the tools make along the way off
+    the map, and reports anything unexpected as an error message instead of a
+    Python traceback."""
+
+    def __enter__(self):
+        self._outputs = gis.outputs_off_map().__enter__()
+        return self
+
+    def __exit__(self, kind, error, tb):
+        self._outputs.__exit__(kind, error, tb)
+        if error is None or not isinstance(error, Exception):
+            return False
+        gis.report(error, warning=False)
+        return True
 
 
 # ---------------------------------------------------------------------------
@@ -253,6 +286,13 @@ class MakeSurveyMap:
         _check_layout(p["layout"])
 
     def execute(self, parameters, messages):
+        with _ToolRun():
+            self._make_map(parameters)
+
+    def _make_map(self, parameters):
+        """Steps 1 to 4. A problem with one survey, layer or table is a warning
+        and the rest carry on. The tool only stops if Step 1 or Step 3 can't
+        do anything at all; if Step 2 or Step 4 fails, the rest still runs."""
         p = _by_name(parameters)
         coordinate_system = _spatial_reference(p["coordinate_system"])
         layout_name = p["layout"].valueAsText
@@ -268,34 +308,43 @@ class MakeSurveyMap:
         )
         if not ok:
             return
-        gdb = result[0]
+        # Only what this run wrote goes on the map, never data left from an
+        # earlier run that couldn't be replaced.
+        gdb, present = result
         _set_output(parameters, "out_gdb", gdb)
 
         arcpy.AddMessage("Step 2 of 4: Draw Transect Lines")
-        transect_points = os.path.join(
-            gdb, surveys.by_code(surveys.TRANSECT_POINTS).feature_class)
-        transect_lines = os.path.join(
-            gdb, surveys.by_code(surveys.TRANSECT_LINES).feature_class)
-        if arcpy.Exists(transect_points) and gis.count(transect_points):
-            ok, _ = _run(
+        if surveys.TRANSECT_POINTS in present:
+            ok, lines = _run(
                 transects.draw_transect_lines,
-                transect_points,
-                transect_lines,
+                os.path.join(gdb, surveys.by_code(surveys.TRANSECT_POINTS).feature_class),
+                os.path.join(gdb, surveys.by_code(surveys.TRANSECT_LINES).feature_class),
                 p["line_length"].value,
                 coordinate_system,
+                carry_on=True,
             )
             if not ok:
-                return
+                arcpy.AddMessage(
+                    "Carried on without transect lines. Once the problem above is "
+                    "fixed, run Step 2 Draw Transect Lines on its own."
+                )
+            elif lines:
+                present[surveys.TRANSECT_LINES] = lines
         else:
-            arcpy.AddMessage("No transect points in this KMZ, so no lines to draw.")
+            arcpy.AddMessage("No transect points to draw lines from.")
 
         arcpy.AddMessage("Step 3 of 4: Connect Data to Layout")
-        ok, _ = _run(layouts.connect_data, layout_name, gdb)
+        ok, present = _run(layouts.connect_data, layout_name, gdb, present)
         if not ok:
             return
 
         arcpy.AddMessage("Step 4 of 4: Restyle Layout")
-        _run(layouts.restyle_layout, layout_name, gdb, spread)
+        ok, _ = _run(layouts.restyle_layout, layout_name, gdb, spread, present)
+        if not ok:
+            arcpy.AddMessage(
+                "Steps 1 to 3 finished, so the survey data is on the map. Once the "
+                "problem above is fixed, run Step 4 Restyle Layout on its own."
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -333,16 +382,17 @@ class ImportSurveyKmz:
         _check_gdb_name(_by_name(parameters)["gdb_name"])
 
     def execute(self, parameters, messages):
-        p = _by_name(parameters)
-        ok, result = _run(
-            kmz.import_kmz,
-            p["in_kmz"].valueAsText,
-            p["out_folder"].valueAsText,
-            p["gdb_name"].valueAsText,
-            _spatial_reference(p["coordinate_system"]),
-        )
-        if ok:
-            _set_output(parameters, "out_gdb", result[0])
+        with _ToolRun():
+            p = _by_name(parameters)
+            ok, result = _run(
+                kmz.import_kmz,
+                p["in_kmz"].valueAsText,
+                p["out_folder"].valueAsText,
+                p["gdb_name"].valueAsText,
+                _spatial_reference(p["coordinate_system"]),
+            )
+            if ok:
+                _set_output(parameters, "out_gdb", result[0])
 
 
 # ---------------------------------------------------------------------------
@@ -403,14 +453,15 @@ class DrawTransectLines:
             out_lines.clearMessage()
 
     def execute(self, parameters, messages):
-        p = _by_name(parameters)
-        _run(
-            transects.draw_transect_lines,
-            p["in_points"].valueAsText,
-            p["out_lines"].valueAsText,
-            p["line_length"].value,
-            _spatial_reference(p["coordinate_system"]),
-        )
+        with _ToolRun():
+            p = _by_name(parameters)
+            _run(
+                transects.draw_transect_lines,
+                p["in_points"].valueAsText,
+                p["out_lines"].valueAsText,
+                p["line_length"].value,
+                _spatial_reference(p["coordinate_system"]),
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -437,8 +488,9 @@ class ConnectDataToLayout:
         _check_survey_gdb(p["survey_gdb"])
 
     def execute(self, parameters, messages):
-        p = _by_name(parameters)
-        _run(layouts.connect_data, p["layout"].valueAsText, p["survey_gdb"].valueAsText)
+        with _ToolRun():
+            p = _by_name(parameters)
+            _run(layouts.connect_data, p["layout"].valueAsText, p["survey_gdb"].valueAsText)
 
 
 # ---------------------------------------------------------------------------
@@ -465,10 +517,11 @@ class RestyleLayout:
         _check_survey_gdb(p["survey_gdb"])
 
     def execute(self, parameters, messages):
-        p = _by_name(parameters)
-        _run(
-            layouts.restyle_layout,
-            p["layout"].valueAsText,
-            p["survey_gdb"].valueAsText,
-            p["spacing"].valueAsText == SPREAD_EVENLY,
-        )
+        with _ToolRun():
+            p = _by_name(parameters)
+            _run(
+                layouts.restyle_layout,
+                p["layout"].valueAsText,
+                p["survey_gdb"].valueAsText,
+                p["spacing"].valueAsText == SPREAD_EVENLY,
+            )
