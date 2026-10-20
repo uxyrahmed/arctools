@@ -55,12 +55,22 @@ SURVEYS = (
     Survey("BP", "Beach Profiles", POINT, ("BP", "P"), "BP_Points"),
     Survey("GW", "Ground Water Sampling Points", POINT, ("GW",), "GW_Points"),
     Survey("C", "Currents Survey Points", POINT, ("C",), "C_Points"),
+    Survey("C_ARROWS", "Currents", POLYLINE, (), "C_Arrows"),
     Survey("N", "Noise Survey Points", POINT, ("N",), "N_Points"),
 )
 
 # Transect points, and the lines drawn from them.
 TRANSECT_POINTS = "T"
 TRANSECT_LINES = "T_LINES"
+
+# Current points, and the arrows drawn from a currents CSV. When there are
+# arrows, they're shown on the map instead of the points; the points still
+# fill the currents table.
+CURRENT_POINTS = "C"
+CURRENT_ARROWS = "C_ARROWS"
+
+# Layers labelled with something other than Name.
+LABEL_FIELDS = {CURRENT_ARROWS: "Label"}
 
 # --- Data -------------------------------------------------------------------
 
@@ -72,8 +82,11 @@ TRANSECT_LENGTH_M = 50.0
 XY_DECIMALS = 2
 XY_DECIMALS_DEGREES = 6
 
-# Default coordinate system for X and Y, and for drawing transect lines:
-# WGS 1984 UTM Zone 43N north of the equator, 43S south of it.
+# Decimal places in the current speed labels, in metres per second.
+CURRENT_SPEED_DECIMALS = 2
+
+# Default coordinate system for X and Y, and for drawing transect lines and
+# current arrows: WGS 1984 UTM Zone 43N north of the equator, 43S south of it.
 UTM_NORTH_WKID = 32643
 UTM_SOUTH_WKID = 32743
 
@@ -85,6 +98,17 @@ LABEL_SIZE_PT = 12
 LABEL_COLOR = (255, 255, 255)
 HALO_COLOR = (0, 0, 0)
 HALO_SIZE_PT = 2
+
+# --- Current arrows ---------------------------------------------------------
+
+# Used when the tools add the Currents layer to the map themselves: a white
+# arrow with a black edge, like the labels. Restyle the layer and save it in
+# the master layout to change it.
+ARROW_COLOR = (255, 255, 255)
+ARROW_EDGE_COLOR = (0, 0, 0)
+ARROW_WIDTH_PT = 1.5
+ARROW_EDGE_PT = 0.75
+ARROWHEAD_SIZE_PT = 9
 
 # --- Layout -----------------------------------------------------------------
 
@@ -131,6 +155,23 @@ def by_code(code):
 
 def point_surveys():
     return [survey for survey in SURVEYS if survey.is_point]
+
+
+def layers_to_show(present):
+    """Codes of the surveys whose layers go on the map: the ones in present,
+    except the current points when the current arrows are shown instead."""
+    shown = set(present)
+    if CURRENT_ARROWS in shown:
+        shown.discard(CURRENT_POINTS)
+    return shown
+
+
+def label_field(survey):
+    """The field a survey's features are labelled with, or None for lines
+    that aren't labelled."""
+    if survey.code in LABEL_FIELDS:
+        return LABEL_FIELDS[survey.code]
+    return "Name" if survey.is_point else None
 
 
 def normalise(name):

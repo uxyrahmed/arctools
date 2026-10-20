@@ -11,6 +11,12 @@ from . import gis, messages, surveys
 
 _GEOMETRIES = {"Point": surveys.POINT, "Polyline": surveys.POLYLINE}
 
+# Feature classes the other steps make, and which step makes them again.
+_REDRAWN_BY = {
+    surveys.TRANSECT_LINES: " Step 2 draws them again from the transect points.",
+    surveys.CURRENT_ARROWS: " Step 3 draws them again from the currents CSV.",
+}
+
 
 def geodatabase_path(folder, name):
     name = str(name).strip()
@@ -84,7 +90,7 @@ def import_kmz(kmz_path, out_folder, gdb_name, coordinate_system=None):
             written[survey.code] = len(features)
         elif arcpy.Exists(path) and gis.clear_features(path):
             # Left from an earlier run, so it doesn't match this KMZ.
-            note = " Step 2 draws them again from these points." if not survey.prefixes else ""
+            note = _REDRAWN_BY.get(survey.code, "")
             arcpy.AddMessage(f"  Cleared {survey.feature_class}, left from an earlier run.{note}")
 
     for prefix in sorted(unknown):

@@ -13,6 +13,9 @@ from . import messages, surveys
 
 WGS84 = 4326
 
+# Field type for AddField -> the type ListFields reports for it.
+FIELD_TYPES = {"TEXT": "String", "DOUBLE": "Double", "DATE": "Date"}
+
 # Locked data is often free again a moment later, for example once OneDrive
 # has synced it, so it's tried this many more times before giving up.
 LOCK_RETRIES = 2
@@ -164,9 +167,12 @@ def count(dataset):
     return int(arcpy.management.GetCount(dataset)[0])
 
 
-def write_features(path, geometry_type, spatial_reference, features, xy_sr=None):
-    """Write features, a list of (name, geometry), to the feature class at
-    path, with a Name field, plus X and Y in xy_sr when xy_sr is given.
+def write_features(path, geometry_type, spatial_reference, features, xy_sr=None,
+                   extra_fields=()):
+    """Write features, a list of (name, geometry, *values), to the feature
+    class at path, with a Name field, then extra_fields ((name, type) pairs,
+    type TEXT, DOUBLE or DATE) holding the values, plus X and Y in xy_sr when
+    xy_sr is given.
 
     A feature class already at path with the same shape, coordinate system
     and fields is emptied and filled again rather than replaced, so this works
@@ -175,11 +181,13 @@ def write_features(path, geometry_type, spatial_reference, features, xy_sr=None)
     them empty.
     """
     name = os.path.basename(path)
-    fields = ["Name"] + (["X", "Y"] if xy_sr is not None else [])
+    fields = [("Name", "TEXT")] + list(extra_fields)
+    if xy_sr is not None:
+        fields += [("X", "DOUBLE"), ("Y", "DOUBLE")]
     try:
         if not _can_reuse(path, geometry_type, spatial_reference, fields):
             retry_on_lock(_create, path, geometry_type, spatial_reference, fields)
-        retry_on_lock(_fill, path, features)
+        retry_on_lock(_fill, path, features, [field for field, _ in extra_fields])
     except Exception as error:
         raise surveys.SurveyMapError(messages.problem(error, f"write {name}")) from error
     if xy_sr is not None:
@@ -204,7 +212,7 @@ def remove_folder(folder):
 
 def _can_reuse(path, geometry_type, spatial_reference, fields):
     """Whether the feature class at path has this shape, coordinate system and
-    fields, and no others."""
+    fields ((name, type) pairs), and no others."""
     try:
         if not arcpy.Exists(path):
             return False
@@ -220,7 +228,7 @@ def _can_reuse(path, geometry_type, spatial_reference, fields):
         }
     except Exception:
         return False
-    wanted = {field.casefold(): "String" if field == "Name" else "Double" for field in fields}
+    wanted = {field.casefold(): FIELD_TYPES[kind] for field, kind in fields}
     return found == wanted
 
 
@@ -231,11 +239,11 @@ def _create(path, geometry_type, spatial_reference, fields):
     arcpy.management.CreateFeatureclass(
         folder, name, geometry_type, spatial_reference=spatial_reference
     )
-    for field in fields:
-        if field == "Name":
-            arcpy.management.AddField(path, field, "TEXT", field_length=255)
+    for field, kind in fields:
+        if kind == "TEXT":
+            arcpy.management.AddField(path, field, kind, field_length=255)
         else:
-            arcpy.management.AddField(path, field, "DOUBLE")
+            arcpy.management.AddField(path, field, kind)
 
 
 def _empty(path):
@@ -249,11 +257,11 @@ def _empty(path):
     return deleted
 
 
-def _fill(path, features):
+def _fill(path, features, extra_fields=()):
     _empty(path)
-    with arcpy.da.InsertCursor(path, ["Name", "SHAPE@"]) as rows:
-        for feature_name, geometry in features:
-            rows.insertRow([feature_name, geometry])
+    with arcpy.da.InsertCursor(path, ["Name", "SHAPE@"] + list(extra_fields)) as rows:
+        for feature in features:
+            rows.insertRow(list(feature))
 
 
 def _calculate_xy(path, xy_sr):

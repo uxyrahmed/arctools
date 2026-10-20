@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Steps 3 and 4: connect the survey data to the master layout, then tidy the
+"""Steps 4 and 5: connect the survey data to the master layout, then tidy the
 layout so it only shows the surveys that are present.
 
 The layout's layers, tables and headings are found by name; see README.md for
@@ -138,7 +138,7 @@ def _surveys_to_show(gdb, present):
     return present
 
 
-# --- Step 3: connect the data -----------------------------------------------
+# --- Step 4: connect the data -----------------------------------------------
 
 
 def connect_data(layout_name, gdb, present=None):
@@ -158,6 +158,20 @@ def connect_data(layout_name, gdb, present=None):
     present = _surveys_to_show(gdb, present)
     arcpy.AddMessage(f"Survey map: '{frame.map.name}', shown in map frame '{frame.name}'.")
 
+    arrows = surveys.by_code(surveys.CURRENT_ARROWS)
+    if arrows.code in present and arrows.code not in layers:
+        with gis.carry_on(f"add the '{arrows.layer_name}' layer to the survey map",
+                          so="the currents show as points") as outcome:
+            layers[arrows.code] = _add_arrows_layer(frame.map, gdb, layers)
+            arcpy.AddMessage(
+                f"Added the '{arrows.layer_name}' layer to the survey map, drawn as "
+                "arrows. To change how it looks, restyle it and save it in the master "
+                "layout; the tools keep its style from then on."
+            )
+        if not outcome.ok:
+            del present[arrows.code]
+    shown = surveys.layers_to_show(present)
+
     connected, turned_off, failed, decimals = [], [], [], {}
     for survey in surveys.SURVEYS:
         layer = layers.get(survey.code)
@@ -171,7 +185,7 @@ def connect_data(layout_name, gdb, present=None):
         with gis.carry_on(f"connect '{survey.layer_name}' to {survey.feature_class}",
                           so="the layer is turned off") as outcome:
             _set_data_source(layer, gdb, survey.feature_class)
-            layer.visible = True
+            layer.visible = survey.code in shown
         if not outcome.ok:
             failed.append(survey.code)
             _turn_off(layer)
@@ -185,6 +199,13 @@ def connect_data(layout_name, gdb, present=None):
         connected.append(f"{survey.layer_name} ({present[survey.code]})")
     for code in failed:
         del present[code]
+    # If the arrows couldn't be connected, the current points go back on.
+    still_shown = surveys.layers_to_show(present)
+    for code in still_shown - shown:
+        if code in layers:
+            with gis.carry_on(f"turn on '{surveys.by_code(code).layer_name}'"):
+                layers[code].visible = True
+    shown = still_shown
     if failed and not connected:
         raise surveys.SurveyMapError(
             "None of the survey layers could be connected to the new data, so "
@@ -213,6 +234,12 @@ def connect_data(layout_name, gdb, present=None):
         arcpy.AddMessage("Connected: " + "; ".join(connected))
     if turned_off:
         arcpy.AddMessage("Turned off, no data to show: " + "; ".join(turned_off))
+    points = surveys.by_code(surveys.CURRENT_POINTS)
+    if points.code in present and points.code not in shown and points.code in layers:
+        arcpy.AddMessage(
+            f"The currents show as arrows, so '{points.layer_name}' is turned off. "
+            f"Its points still fill {points.table_name}."
+        )
     lost = [s.layer_name for s in surveys.SURVEYS if s.code in present and s.code not in layers]
     if lost:
         arcpy.AddWarning(
@@ -222,6 +249,75 @@ def connect_data(layout_name, gdb, present=None):
         )
     _warn_missing("tables", missing_tables)
     return present
+
+
+def _add_arrows_layer(map_, gdb, layers):
+    """Add the current arrows to the survey map, drawn as arrows, above the
+    current points. Returns the new layer."""
+    survey = surveys.by_code(surveys.CURRENT_ARROWS)
+    layer = map_.addDataFromPath(os.path.join(gdb, survey.feature_class))
+    layer.name = survey.layer_name
+    definition = layer.getDefinition("V3")
+    renderer = getattr(definition, "renderer", None)
+    if _cim_type(renderer) == "CIMSimpleRenderer" and getattr(renderer, "symbol", None) is not None:
+        renderer.symbol.symbol = _arrow_symbol()
+    else:
+        reference = arcpy.cim.CreateCIMObjectFromClassName("CIMSymbolReference", "V3")
+        reference.symbol = _arrow_symbol()
+        renderer = arcpy.cim.CreateCIMObjectFromClassName("CIMSimpleRenderer", "V3")
+        renderer.symbol = reference
+        definition.renderer = renderer
+    layer.setDefinition(definition)
+    points = layers.get(surveys.CURRENT_POINTS)
+    if points is not None:
+        try:
+            map_.moveLayer(points, layer, "BEFORE")
+        except Exception:
+            pass  # Where it sits in the Contents pane doesn't matter.
+    return layer
+
+
+def _arrow_symbol():
+    """A line with an edge, and an arrowhead at its end."""
+    head = arcpy.cim.CreateCIMObjectFromClassName("CIMVectorMarker", "V3")
+    head.enable = True
+    head.size = surveys.ARROWHEAD_SIZE_PT
+    head.anchorPointUnits = "Relative"
+    head.frame = {"xmin": -5.0, "ymin": -5.0, "xmax": 5.0, "ymax": 5.0}
+    head.respectFrame = True
+    head.scaleSymbolsProportionally = True
+    graphic = arcpy.cim.CreateCIMObjectFromClassName("CIMMarkerGraphic", "V3")
+    # A triangle pointing along the line.
+    graphic.geometry = {"rings": [[[5.0, 0.0], [-5.0, 4.0], [-5.0, -4.0], [5.0, 0.0]]]}
+    fill = _fill_symbol(surveys.ARROW_COLOR)
+    fill.symbolLayers = [
+        _stroke(surveys.ARROW_EDGE_COLOR, surveys.ARROW_EDGE_PT)
+    ] + list(fill.symbolLayers)
+    graphic.symbol = fill
+    head.markerGraphics = [graphic]
+    placement = arcpy.cim.CreateCIMObjectFromClassName("CIMMarkerPlacementAtExtremities", "V3")
+    placement.angleToLine = True
+    placement.extremityPlacement = "JustEnd"
+    head.markerPlacement = placement
+
+    symbol = arcpy.cim.CreateCIMObjectFromClassName("CIMLineSymbol", "V3")
+    symbol.symbolLayers = [
+        head,
+        _stroke(surveys.ARROW_COLOR, surveys.ARROW_WIDTH_PT),
+        _stroke(surveys.ARROW_EDGE_COLOR, surveys.ARROW_WIDTH_PT + 2 * surveys.ARROW_EDGE_PT),
+    ]
+    return symbol
+
+
+def _stroke(rgb, width):
+    stroke = arcpy.cim.CreateCIMObjectFromClassName("CIMSolidStroke", "V3")
+    stroke.enable = True
+    stroke.capStyle = "Round"
+    stroke.joinStyle = "Round"
+    stroke.miterLimit = 10
+    stroke.width = width
+    stroke.color = _rgb_color(rgb)
+    return stroke
 
 
 def _turn_off(layer):
@@ -252,10 +348,11 @@ def _set_data_source(layer, gdb, feature_class):
 
 
 def _set_labels(layer, survey):
-    """Points are labelled with their Name in the standard style; lines aren't
-    labelled."""
+    """Points are labelled with their Name in the standard style, and current
+    arrows with their speed and direction; other lines aren't labelled."""
     definition = layer.getDefinition("V3")
-    if not survey.is_point:
+    field = surveys.label_field(survey)
+    if field is None:
         definition.labelVisibility = False
         layer.setDefinition(definition)
         return
@@ -268,7 +365,7 @@ def _set_labels(layer, survey):
         return
     label = classes[0]
     label.expressionEngine = "Arcade"
-    label.expression = "$feature.Name"
+    label.expression = f"$feature.{field}"
     # A SQL query or scale range left on the label class would hide labels.
     # Layers first made from KML often have the query "LabelID" = 0, and the
     # survey data has no LabelID field, so those points went unlabelled.
@@ -283,18 +380,38 @@ def _set_labels(layer, survey):
     text.symbol = _fill_symbol(surveys.LABEL_COLOR)
     text.haloSymbol = _fill_symbol(surveys.HALO_COLOR)
     text.haloSize = surveys.HALO_SIZE_PT
+    if not survey.is_point:
+        _place_along_line(label)
     for other in classes[1:]:
         other.visibility = False
     definition.labelVisibility = True
     layer.setDefinition(definition)
 
 
-def _fill_symbol(rgb):
+def _place_along_line(label):
+    """Label a line along it, even when the line is shorter than the label, as
+    a current arrow often is."""
+    placement = getattr(label, "maplexLabelPlacementProperties", None)
+    if placement is None:
+        return
+    placement.linePlacementMethod = "OffsetStraightFromLine"
+    placement.constrainOffset = "AboveLine"
+    placement.canOverrunFeature = True
+    placement.maximumLabelOverrun = 200
+    placement.maximumLabelOverrunUnit = "Point"
+    placement.neverRemoveLabel = True
+
+
+def _rgb_color(rgb):
     color = arcpy.cim.CreateCIMObjectFromClassName("CIMRGBColor", "V3")
     color.values = [rgb[0], rgb[1], rgb[2], 100]
+    return color
+
+
+def _fill_symbol(rgb):
     fill = arcpy.cim.CreateCIMObjectFromClassName("CIMSolidFill", "V3")
     fill.enable = True
-    fill.color = color
+    fill.color = _rgb_color(rgb)
     symbol = arcpy.cim.CreateCIMObjectFromClassName("CIMPolygonSymbol", "V3")
     symbol.symbolLayers = [fill]
     return symbol
@@ -379,7 +496,7 @@ def _new_table_field(table, name):
     return field
 
 
-# --- Step 4: restyle the layout ---------------------------------------------
+# --- Step 5: restyle the layout ---------------------------------------------
 
 
 def restyle_layout(layout_name, gdb, spread=False, present=None):
@@ -398,8 +515,18 @@ def restyle_layout(layout_name, gdb, spread=False, present=None):
     present = _surveys_to_show(gdb, present)
     points_per_unit = stacking.points_per_unit(layout.pageUnits)
 
+    arrows = surveys.by_code(surveys.CURRENT_ARROWS)
+    if arrows.code in present and arrows.code not in layers:
+        arcpy.AddWarning(
+            f"There are current arrows in {gdb}, but the survey map has no "
+            f"'{arrows.layer_name}' layer yet, so the current points are shown "
+            "instead. Run Step 4 Connect Data to Layout to add it."
+        )
+        present = {code: n for code, n in present.items() if code != arrows.code}
+    shown_layers = surveys.layers_to_show(present)
+
     for code, layer in layers.items():
-        show = code in present
+        show = code in shown_layers
         with gis.carry_on(f"{'show' if show else 'hide'} '{surveys.by_code(code).layer_name}'"):
             layer.visible = show
 
@@ -458,7 +585,7 @@ def restyle_layout(layout_name, gdb, spread=False, present=None):
         blocks.sort(key=lambda item: -item[0])
 
         with gis.carry_on("update the legend"):
-            _update_legends(elements, frame, layers, present)
+            _update_legends(elements, frame, layers, shown_layers)
 
         panel = _bounds(panel_element) if panel_element is not None else None
         if panel is None:
@@ -520,6 +647,11 @@ def restyle_layout(layout_name, gdb, spread=False, present=None):
             element.elementPositionY = y
 
     arcpy.AddMessage("Showing: " + ", ".join(shown))
+    if arrows.code in shown_layers:
+        arcpy.AddMessage(
+            f"Currents show as arrows labelled with their speed and direction "
+            f"({surveys.plural(present[arrows.code], 'arrow')})."
+        )
     if hidden:
         arcpy.AddMessage("Hidden, no data to show: " + ", ".join(hidden))
     if tables.ok and panel is not None:
@@ -528,16 +660,45 @@ def restyle_layout(layout_name, gdb, spread=False, present=None):
     _warn_missing("tables and headings", missing)
 
 
-def _update_legends(elements, frame, layers, present):
-    """Show only the survey layers with data in the survey map's legends."""
-    shown_layers = {
-        layers[code].getDefinition("V3").uRI for code in layers if code in present
-    }
+def _update_legends(elements, frame, layers, shown):
+    """Show only the survey layers on the map (codes in shown) in the survey
+    map's legends. The current arrows get a legend entry next to the current
+    points' if ArcGIS Pro hasn't added one."""
+    uris = {code: layers[code].getDefinition("V3").uRI for code in layers}
+    shown_layers = {uri for code, uri in uris.items() if code in shown}
     for legend in (e for e in elements if _cim_type(e) == "CIMLegend"):
         if getattr(legend, "mapFrame", None) != frame.name:
             continue
-        for item in legend.items or []:
+        items = list(legend.items or [])
+        arrows = uris.get(surveys.CURRENT_ARROWS)
+        if arrows in shown_layers and arrows not in [getattr(i, "layer", None) for i in items]:
+            items = _with_legend_item(
+                items, arrows, layers[surveys.CURRENT_ARROWS].name,
+                after=uris.get(surveys.CURRENT_POINTS),
+            )
+        for item in items:
             item.isVisible = getattr(item, "layer", None) in shown_layers
+        legend.items = items
+
+
+def _with_legend_item(items, uri, name, after=None):
+    """items with a new entry for the layer uri, styled like the entry for the
+    layer after (or the last entry) and placed just after it."""
+    index = next(
+        (n for n, item in enumerate(items) if getattr(item, "layer", None) == after),
+        len(items) - 1,
+    )
+    item = None
+    if items:
+        try:
+            item = copy.deepcopy(items[index])
+        except Exception:
+            item = None
+    if item is None:
+        item = arcpy.cim.CreateCIMObjectFromClassName("CIMLegendItem", "V3")
+    item.name = name
+    item.layer = uri
+    return items[:index + 1] + [item] + items[index + 1:]
 
 
 def _table_height_points(table, rows):

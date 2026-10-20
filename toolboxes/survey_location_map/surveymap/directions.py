@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Reading the direction out of a transect name, and working out where a line
-in that direction ends. No arcpy here.
+"""Compass directions: reading the direction out of a transect name, working
+out where a line in that direction ends, and naming the direction of a line.
+No arcpy here.
 
 Transect names hold the transect ID, then a compass direction and usually the
 depth, for example 'T201 S 2m' or 'T204 NE 3m'.
@@ -64,6 +65,18 @@ def parse_direction(name):
         if point:
             return BEARINGS[point]
     return None
+
+
+def compass_point(bearing):
+    """The nearest of the 16 compass points to a bearing in degrees:
+    181 -> 'S', 103 -> 'ESE'."""
+    return COMPASS_POINTS[int(math.floor((bearing % 360.0) / 22.5 + 0.5)) % 16]
+
+
+def bearing_to(dx, dy):
+    """Bearing in degrees clockwise from north, from 0 up to 360, of a line
+    going dx east and dy north."""
+    return math.degrees(math.atan2(dx, dy)) % 360.0
 
 
 def offset(x, y, bearing, distance):

@@ -23,7 +23,8 @@ for _name in [name for name in sys.modules if name.split(".")[0] == "surveymap"]
 importlib.invalidate_caches()
 try:
     from surveymap import (  # noqa: E402
-        directions, gis, kmz, layouts, messages, stacking, surveys, transects,
+        arrows, currents, directions, gis, kmz, layouts, messages, stacking, surveys,
+        transects,
     )
 except ImportError as error:
     raise ImportError(
@@ -44,6 +45,7 @@ class Toolbox:
             MakeSurveyMap,
             ImportSurveyKmz,
             DrawTransectLines,
+            DrawCurrentArrows,
             ConnectDataToLayout,
             RestyleLayout,
         ]
@@ -63,6 +65,18 @@ def _kmz_parameter():
         direction="Input",
     )
     param.filter.list = ["kmz", "kml"]
+    return param
+
+
+def _csv_parameter(required):
+    param = arcpy.Parameter(
+        displayName="Currents CSV",
+        name="currents_csv",
+        datatype="DEFile",
+        parameterType="Required" if required else "Optional",
+        direction="Input",
+    )
+    param.filter.list = ["csv", "txt"]
     return param
 
 
@@ -267,14 +281,16 @@ class MakeSurveyMap:
     def __init__(self):
         self.label = "Make Survey Map (All in One)"
         self.description = (
-            "Runs Steps 1 to 4 in order: imports the survey KMZ, draws the "
-            "transect lines, connects the data to the master layout and "
-            "restyles the layout to fit the surveys in the KMZ.")
+            "Runs Steps 1 to 5 in order: imports the survey KMZ, draws the "
+            "transect lines, draws the current arrows if you give a currents "
+            "CSV, connects the data to the master layout and restyles the "
+            "layout to fit the surveys in the KMZ.")
         self.category = None
 
     def getParameterInfo(self):
         return [
             _kmz_parameter(),
+            _csv_parameter(required=False),
             _layout_parameter(),
             _folder_parameter(),
             _gdb_name_parameter(),
@@ -299,15 +315,15 @@ class MakeSurveyMap:
             self._make_map(parameters)
 
     def _make_map(self, parameters):
-        """Steps 1 to 4. A problem with one survey, layer or table is a warning
-        and the rest carry on. The tool only stops if Step 1 or Step 3 can't
-        do anything at all; if Step 2 or Step 4 fails, the rest still runs."""
+        """Steps 1 to 5. A problem with one survey, layer or table is a warning
+        and the rest carry on. The tool only stops if Step 1 or Step 4 can't
+        do anything at all; if Step 2, 3 or 5 fails, the rest still runs."""
         p = _by_name(parameters)
         coordinate_system = _spatial_reference(p["coordinate_system"])
         layout_name = p["layout"].valueAsText
         spread = p["spacing"].valueAsText == SPREAD_EVENLY
 
-        arcpy.AddMessage("Step 1 of 4: Import Survey KMZ")
+        arcpy.AddMessage("Step 1 of 5: Import Survey KMZ")
         ok, result = _run(
             kmz.import_kmz,
             p["in_kmz"].valueAsText,
@@ -322,7 +338,7 @@ class MakeSurveyMap:
         gdb, present = result
         _set_output(parameters, "out_gdb", gdb)
 
-        arcpy.AddMessage("Step 2 of 4: Draw Transect Lines")
+        arcpy.AddMessage("Step 2 of 5: Draw Transect Lines")
         if surveys.TRANSECT_POINTS in present:
             ok, lines = _run(
                 transects.draw_transect_lines,
@@ -342,17 +358,36 @@ class MakeSurveyMap:
         else:
             arcpy.AddMessage("No transect points to draw lines from.")
 
-        arcpy.AddMessage("Step 3 of 4: Connect Data to Layout")
+        arcpy.AddMessage("Step 3 of 5: Draw Current Arrows")
+        csv_path = p["currents_csv"].valueAsText
+        if csv_path:
+            ok, drawn = _run(
+                arrows.draw_current_arrows, csv_path, gdb, coordinate_system, carry_on=True
+            )
+            if ok and drawn:
+                present[surveys.CURRENT_ARROWS] = drawn
+            else:
+                arcpy.AddMessage(
+                    "Carried on without current arrows, so the currents show as "
+                    "points. Once the problem above is fixed, run Step 3 Draw "
+                    "Current Arrows, then Steps 4 and 5, on their own."
+                )
+        elif surveys.CURRENT_POINTS in present:
+            arcpy.AddMessage("No currents CSV, so the currents show as points.")
+        else:
+            arcpy.AddMessage("No currents CSV, so no current arrows.")
+
+        arcpy.AddMessage("Step 4 of 5: Connect Data to Layout")
         ok, present = _run(layouts.connect_data, layout_name, gdb, present)
         if not ok:
             return
 
-        arcpy.AddMessage("Step 4 of 4: Restyle Layout")
+        arcpy.AddMessage("Step 5 of 5: Restyle Layout")
         ok, _ = _run(layouts.restyle_layout, layout_name, gdb, spread, present)
         if not ok:
             arcpy.AddMessage(
-                "Steps 1 to 3 finished, so the survey data is on the map. Once the "
-                "problem above is fixed, run Step 4 Restyle Layout on its own."
+                "Steps 1 to 4 finished, so the survey data is on the map. Once the "
+                "problem above is fixed, run Step 5 Restyle Layout on its own."
             )
 
 
@@ -474,18 +509,56 @@ class DrawTransectLines:
 
 
 # ---------------------------------------------------------------------------
-# Step 3: Connect Data to Layout
+# Step 3: Draw Current Arrows
+# ---------------------------------------------------------------------------
+
+
+class DrawCurrentArrows:
+    def __init__(self):
+        self.label = "Step 3 Draw Current Arrows"
+        self.description = (
+            "Works out each current's speed and direction from the currents "
+            "CSV (each current's start and end point and the time each was "
+            "recorded) and draws an arrow from start to end, labelled with the "
+            "speed and direction. Steps 4 and 5 then show the arrows instead of "
+            "the current points.")
+        self.category = None
+
+    def getParameterInfo(self):
+        return [
+            _csv_parameter(required=True),
+            _survey_gdb_parameter(),
+            _coordinate_system_parameter("Coordinate System to Measure In"),
+        ]
+
+    def updateMessages(self, parameters):
+        _check_survey_gdb(_by_name(parameters)["survey_gdb"])
+
+    def execute(self, parameters, messages):
+        with _ToolRun():
+            p = _by_name(parameters)
+            _run(
+                arrows.draw_current_arrows,
+                p["currents_csv"].valueAsText,
+                p["survey_gdb"].valueAsText,
+                _spatial_reference(p["coordinate_system"]),
+            )
+
+
+# ---------------------------------------------------------------------------
+# Step 4: Connect Data to Layout
 # ---------------------------------------------------------------------------
 
 
 class ConnectDataToLayout:
     def __init__(self):
-        self.label = "Step 3 Connect Data to Layout"
+        self.label = "Step 4 Connect Data to Layout"
         self.description = (
             "Points each survey layer in the master layout's map at the "
             "matching feature class in the survey geodatabase, links each "
             "survey's table to its layer and labels the points. Surveys with "
-            "no data are turned off.")
+            "no data are turned off. Current arrows from Step 3 are added to "
+            "the map the first time, and shown instead of the current points.")
         self.category = None
 
     def getParameterInfo(self):
@@ -503,13 +576,13 @@ class ConnectDataToLayout:
 
 
 # ---------------------------------------------------------------------------
-# Step 4: Restyle Layout
+# Step 5: Restyle Layout
 # ---------------------------------------------------------------------------
 
 
 class RestyleLayout:
     def __init__(self):
-        self.label = "Step 4 Restyle Layout"
+        self.label = "Step 5 Restyle Layout"
         self.description = (
             "Hides the layers, tables, headings and legend entries of surveys "
             "that aren't in the survey geodatabase, sizes each table to its "

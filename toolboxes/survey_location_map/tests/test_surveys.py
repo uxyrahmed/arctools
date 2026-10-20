@@ -96,9 +96,31 @@ class SurveyTableTests(unittest.TestCase):
                 "Beach Profiles",
                 "Ground Water Sampling Points",
                 "Currents Survey Points",
+                "Currents",
                 "Noise Survey Points",
             ],
         )
+
+    def test_current_codes(self):
+        self.assertEqual(surveys.by_code(surveys.CURRENT_POINTS).geometry, POINT)
+        arrows = surveys.by_code(surveys.CURRENT_ARROWS)
+        self.assertEqual(arrows.geometry, POLYLINE)
+        # Drawn from the currents CSV, so no KMZ feature goes into them.
+        self.assertEqual(arrows.prefixes, ())
+        self.assertIsNone(arrows.table_name)
+
+    def test_arrows_replace_current_points_on_the_map(self):
+        self.assertEqual(
+            surveys.layers_to_show({"SW": 6, "C": 4, "C_ARROWS": 2}), {"SW", "C_ARROWS"}
+        )
+        self.assertEqual(surveys.layers_to_show({"SW": 6, "C": 4}), {"SW", "C"})
+        self.assertEqual(surveys.layers_to_show({}), set())
+
+    def test_label_fields(self):
+        self.assertEqual(surveys.label_field(surveys.by_code("SW")), "Name")
+        self.assertEqual(surveys.label_field(surveys.by_code("C_ARROWS")), "Label")
+        self.assertIsNone(surveys.label_field(surveys.by_code("T_LINES")))
+        self.assertIsNone(surveys.label_field(surveys.by_code("VSS_LINES")))
 
 
 class NamePrefixTests(unittest.TestCase):

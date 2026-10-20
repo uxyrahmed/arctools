@@ -15,6 +15,25 @@ from surveymap import directions  # noqa: E402
 from surveymap.directions import parse_direction  # noqa: E402
 
 
+class CompassPointTests(unittest.TestCase):
+    def test_nearest_point(self):
+        for bearing, point in ((0, "N"), (11.2, "N"), (11.3, "NNE"), (45, "NE"),
+                               (103.1, "ESE"), (181.2, "S"), (350, "N"), (360, "N"),
+                               (-22.5, "NNW"), (720 + 90, "E")):
+            with self.subTest(bearing=bearing):
+                self.assertEqual(directions.compass_point(bearing), point)
+
+    def test_every_point_maps_back(self):
+        for point, bearing in directions.BEARINGS.items():
+            self.assertEqual(directions.compass_point(bearing), point)
+
+    def test_bearing_to(self):
+        for dx, dy, bearing in ((0, 1, 0), (1, 1, 45), (1, 0, 90), (0, -1, 180),
+                                (-1, 0, 270), (-1, 1, 315)):
+            with self.subTest(dx=dx, dy=dy):
+                self.assertAlmostEqual(directions.bearing_to(dx, dy), bearing)
+
+
 class BearingTests(unittest.TestCase):
     def test_sixteen_points(self):
         self.assertEqual(len(directions.BEARINGS), 16)
