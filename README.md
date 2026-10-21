@@ -9,7 +9,7 @@ arctools/
 ├── toolboxes/        # Toolboxes you can add to an ArcGIS Pro project
 │   ├── _template/    # Starter Python toolbox (.pyt) to copy for new tools
 │   └── survey_location_map/  # Survey Location Map toolbox (survey KMZ to map layout)
-├── scripts/          # Standalone arcpy scripts that run outside a toolbox
+├── scripts/          # Standalone arcpy scripts, and the script that zips a toolbox for a release
 └── data/
     └── images/       # Photos used as input data for the tools
 ```
@@ -23,9 +23,25 @@ modules, sample data or notes it needs.
 - The Python environment that ships with ArcGIS Pro (`arcgispro-py3`), which
   includes `arcpy`
 
+## Downloading a toolbox
+
+Each toolbox has its own release with a zip of just that toolbox. Open
+[Releases](https://github.com/uxyrahmed/arctools/releases), find the newest
+release for the toolbox you want (for example `survey-location-map-v1.0`) and
+download the zip under **Assets**. Unzip it anywhere and add the `.pyt` inside
+(see below).
+
+Releases are made automatically: every time a change to a toolbox lands on
+`main`, that toolbox gets a new release (v1.0, v1.1, v1.2, ...) listing what
+changed. Toolboxes that didn't change keep their last release. To re-release
+a toolbox by hand, run **Release toolboxes** from the Actions tab. To jump to a
+new major version, put it in a `VERSION` file in the toolbox folder (for
+example `2.0`).
+
 ## Using a toolbox in ArcGIS Pro
 
-1. Clone or download this repository.
+1. Download the toolbox's zip from [Releases](#downloading-a-toolbox), or clone
+   or download this repository.
 2. In ArcGIS Pro, open the **Catalog** pane.
 3. Right-click **Toolboxes** > **Add Toolbox**, then browse to the `.pyt` or
    `.atbx` file under `toolboxes/`.
