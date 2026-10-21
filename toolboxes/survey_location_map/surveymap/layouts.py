@@ -87,6 +87,33 @@ def survey_layers(map_):
     return found
 
 
+def _correct_spelling(layout, layers):
+    """Correct old spellings, such as 'Snorkelling', in the survey layer names
+    (which are also the legend text) and in the table headings."""
+    corrected = []
+    for layer in layers.values():
+        with gis.carry_on("correct the spelling of a survey layer's name",
+                          so="it keeps the old spelling"):
+            old = layer.name
+            new = surveys.fix_spelling(old)
+            if new != old:
+                layer.name = new
+                corrected.append(f"'{new}'")
+    headings = {surveys.normalise(s.heading_name) for s in surveys.point_surveys()}
+    with gis.carry_on("correct the spelling in the table headings",
+                      so="they keep the old spelling"):
+        for element in layout.listElements("TEXT_ELEMENT"):
+            if surveys.normalise(element.name) not in headings:
+                continue
+            old = element.text
+            new = surveys.fix_spelling(old)
+            if new != old:
+                element.text = new
+                corrected.append(element.name)
+    if corrected:
+        arcpy.AddMessage("Corrected the spelling in: " + ", ".join(corrected) + ".")
+
+
 def find_survey_map_frame(layout):
     """The map frame showing the map with the most survey layers in it."""
     best_key = best = None
@@ -157,6 +184,7 @@ def connect_data(layout_name, gdb, present=None):
     layers = survey_layers(frame.map)
     present = _surveys_to_show(gdb, present)
     arcpy.AddMessage(f"Survey map: '{frame.map.name}', shown in map frame '{frame.name}'.")
+    _correct_spelling(layout, layers)
 
     arrows = surveys.by_code(surveys.CURRENT_ARROWS)
     if arrows.code in present and arrows.code not in layers:
@@ -514,6 +542,7 @@ def restyle_layout(layout_name, gdb, spread=False, present=None):
     layers = survey_layers(frame.map)
     present = _surveys_to_show(gdb, present)
     points_per_unit = stacking.points_per_unit(layout.pageUnits)
+    _correct_spelling(layout, layers)
 
     arrows = surveys.by_code(surveys.CURRENT_ARROWS)
     if arrows.code in present and arrows.code not in layers:
@@ -678,6 +707,8 @@ def _update_legends(elements, frame, layers, shown):
             )
         for item in items:
             item.isVisible = getattr(item, "layer", None) in shown_layers
+            if getattr(item, "name", None):
+                item.name = surveys.fix_spelling(item.name)
         legend.items = items
 
 

@@ -89,8 +89,8 @@ class SurveyTableTests(unittest.TestCase):
             [s.layer_name for s in surveys.SURVEYS],
             [
                 "Sea Water Sampling Points",
-                "Visual Snorkelling Survey Points",
-                "Visual Snorkelling Survey Lines",
+                "Visual Snorkeling Survey Points",
+                "Visual Snorkeling Survey Lines",
                 "Marine Transects",
                 "Transect Line",
                 "Beach Profiles",
@@ -165,7 +165,7 @@ class SurveyForTests(unittest.TestCase):
         self.assertEqual(surveys.survey_for("Vss 2", POLYLINE).code, "VSS_LINES")
 
     def test_longer_prefixes_are_not_cut_short(self):
-        # SW is sea water, not S; VSS is snorkelling, not V; GW is not G.
+        # SW is sea water, not S; VSS is snorkeling, not V; GW is not G.
         self.assertEqual(surveys.survey_for("SW1", POINT).code, "SW")
         self.assertIsNone(surveys.survey_for("S1", POINT))
         self.assertIsNone(surveys.survey_for("V1", POINT))
@@ -193,6 +193,33 @@ class HelperTests(unittest.TestCase):
         )
         self.assertEqual(surveys.normalise(None), "")
         self.assertEqual(surveys.normalise("SW TABLE"), surveys.normalise("sw table"))
+
+    def test_old_spelling_still_matches(self):
+        # Masters made before spell it "Snorkelling".
+        for survey in (surveys.by_code("VSS"), surveys.by_code("VSS_LINES")):
+            old = survey.layer_name.replace("Snorkeling", "Snorkelling")
+            self.assertNotEqual(old, survey.layer_name)
+            self.assertEqual(surveys.normalise(old), surveys.normalise(survey.layer_name))
+
+    def test_fix_spelling(self):
+        self.assertEqual(
+            surveys.fix_spelling("Visual Snorkelling Survey Points"),
+            "Visual Snorkeling Survey Points",
+        )
+        self.assertEqual(surveys.fix_spelling("VISUAL SNORKELLING"), "VISUAL SNORKELING")
+        self.assertEqual(surveys.fix_spelling("visual snorkelling"), "visual snorkeling")
+        self.assertEqual(
+            surveys.fix_spelling("Snorkelling and snorkelling"), "Snorkeling and snorkeling"
+        )
+
+    def test_fix_spelling_leaves_the_rest_alone(self):
+        for text in ("Visual Snorkeling Survey Lines", "Sea Water Sampling Points", "SW Table", ""):
+            self.assertEqual(surveys.fix_spelling(text), text)
+        self.assertEqual(surveys.fix_spelling(None), "")
+
+    def test_layer_names_are_spelled_right(self):
+        for survey in surveys.SURVEYS:
+            self.assertEqual(surveys.fix_spelling(survey.layer_name), survey.layer_name)
 
     def test_natural_key(self):
         names = ["P10", "P2", "P1", "p3", "SW201", "C202 end", "C201 start", "C201 end"]

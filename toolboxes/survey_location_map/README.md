@@ -40,8 +40,8 @@ current point.
 | Survey | KMZ prefix | Feature class | Layer in the master layout | Table | Heading |
 | ------ | ---------- | ------------- | -------------------------- | ----- | ------- |
 | Sea water sampling | SW | `SW_Points` | Sea Water Sampling Points | SW Table | SW Heading |
-| Visual snorkelling survey | VSS | `VSS_Points` | Visual Snorkelling Survey Points | VSS Table | VSS Heading |
-| Visual snorkelling survey lines | VSS (lines) | `VSS_Lines` | Visual Snorkelling Survey Lines | | |
+| Visual snorkeling survey | VSS | `VSS_Points` | Visual Snorkeling Survey Points | VSS Table | VSS Heading |
+| Visual snorkeling survey lines | VSS (lines) | `VSS_Lines` | Visual Snorkeling Survey Lines | | |
 | Marine transects | T | `T_Points` | Marine Transects | T Table | T Heading |
 | Transect lines | drawn by Step 2 | `T_Lines` | Transect Line | | |
 | Beach profiles | P or BP | `BP_Points` | Beach Profiles | BP Table | BP Heading |
@@ -50,9 +50,11 @@ current point.
 | Current arrows | drawn by Step 3 from the currents CSV | `C_Arrows` | Currents (added by Step 4 if it's missing) | | |
 | Noise survey | N | `N_Points` | Noise Survey Points | N Table | N Heading |
 
-- Of the lines in the KMZ, only VSS lines are kept. Other lines and all
-  polygons (building outlines, bathymetry and so on) are left out, and Step 1
-  says how many.
+- VSS lines (lines whose names start with VSS) go on the map with the VSS
+  points. When the KMZ has none, the Visual Snorkeling Survey Lines layer
+  and its legend entry are hidden, so only the points show.
+- Other lines and all polygons (building outlines, bathymetry and so on)
+  are left out, and Step 1 says how many.
 - Points whose prefix isn't in the table are saved as `<PREFIX>_Points`, with
   a warning, but don't go on the map. Points whose names don't start with a
   letter are left out, with a warning.
@@ -216,6 +218,9 @@ shows as 281308.00. The features themselves stay in WGS 1984, like the KMZ.
 The tools find everything in the layout **by name**, so the names must match
 (capitals and extra spaces don't matter). Anything else, such as the title
 block, mini map, north arrow, scale bar and logo, is left alone.
+
+Layers and headings still spelled "Snorkelling", as in masters made before,
+are found too, and Steps 4 and 5 correct them to "Snorkeling".
 
 1. **Survey layers:** the 9 layers in the [Surveys](#surveys) table other than
    Currents, in the map shown in the main map frame, each styled the way it

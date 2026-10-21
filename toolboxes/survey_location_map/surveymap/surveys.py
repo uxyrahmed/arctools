@@ -48,8 +48,8 @@ class Survey(namedtuple("Survey", "code layer_name geometry prefixes feature_cla
 
 SURVEYS = (
     Survey("SW", "Sea Water Sampling Points", POINT, ("SW",), "SW_Points"),
-    Survey("VSS", "Visual Snorkelling Survey Points", POINT, ("VSS",), "VSS_Points"),
-    Survey("VSS_LINES", "Visual Snorkelling Survey Lines", POLYLINE, ("VSS",), "VSS_Lines"),
+    Survey("VSS", "Visual Snorkeling Survey Points", POINT, ("VSS",), "VSS_Points"),
+    Survey("VSS_LINES", "Visual Snorkeling Survey Lines", POLYLINE, ("VSS",), "VSS_Lines"),
     Survey("T", "Marine Transects", POINT, ("T",), "T_Points"),
     Survey("T_LINES", "Transect Line", POLYLINE, (), "T_Lines"),
     Survey("BP", "Beach Profiles", POINT, ("BP", "P"), "BP_Points"),
@@ -71,6 +71,11 @@ CURRENT_ARROWS = "C_ARROWS"
 
 # Layers labelled with something other than Name.
 LABEL_FIELDS = {CURRENT_ARROWS: "Label"}
+
+# Old spellings that layouts made before may still have, in lower case, with
+# their corrections. Layers and headings spelled the old way are still found,
+# and the tools correct them so the legend and tables read right.
+SPELLING_FIXES = (("snorkelling", "snorkeling"),)
 
 # --- Data -------------------------------------------------------------------
 
@@ -175,9 +180,35 @@ def label_field(survey):
 
 
 def normalise(name):
-    """Name used for matching layers and layout elements: case and extra
-    spaces don't matter."""
-    return " ".join(str(name or "").split()).casefold()
+    """Name used for matching layers and layout elements: case, extra spaces
+    and old spellings don't matter."""
+    text = " ".join(str(name or "").split()).casefold()
+    for old, new in SPELLING_FIXES:
+        text = text.replace(old, new)
+    return text
+
+
+def fix_spelling(text):
+    """text with any old spelling corrected, keeping its capitals.
+
+    'Visual Snorkelling Survey' -> 'Visual Snorkeling Survey'.
+    """
+    text = str(text or "")
+    for old, new in SPELLING_FIXES:
+        text = re.sub(
+            re.escape(old), lambda match, new=new: _same_case(match.group(0), new),
+            text, flags=re.IGNORECASE,
+        )
+    return text
+
+
+def _same_case(model, word):
+    """word in capitals, with a capital first letter or in lower case, like model."""
+    if model.isupper():
+        return word.upper()
+    if model[:1].isupper():
+        return word[:1].upper() + word[1:]
+    return word
 
 
 def unknown_feature_class(prefix):

@@ -122,7 +122,11 @@ def import_kmz(kmz_path, out_folder, gdb_name, coordinate_system=None):
         )
     if skipped:
         counts = ", ".join(surveys.plural(n, kind) for kind, n in sorted(skipped.items()))
-        arcpy.AddMessage(f"Left out features that aren't survey data: {counts}.")
+        note = ""
+        if skipped.get("line"):
+            prefixes = [p for s in surveys.SURVEYS if not s.is_point for p in s.prefixes]
+            note = f" Lines only go on the map when their names start with {' or '.join(prefixes)}."
+        arcpy.AddMessage(f"Left out features that aren't survey data: {counts}.{note}")
     arcpy.AddMessage(f"X and Y are in {gis.describe_spatial_reference(xy_sr)}.")
     return gdb, written
 
