@@ -48,4 +48,4 @@ your clone of this repository instead.
 
 | Toolbox | Description |
 | ------- | ----------- |
-| _None yet_ | |
+| [Shoreline Tracing](toolboxes/shoreline_tracing/) | Trains a model on hand-drawn shorelines and uses it to draw the low tide, high tide and vegetation lines from a drone image |
