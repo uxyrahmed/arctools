@@ -1,12 +1,12 @@
-# Publishes each toolbox under toolboxes/ as its own GitHub Release, with a zip
-# you can download, unzip and add to ArcGIS Pro.
+# Publishes one GitHub Release with a separate zip for every toolbox under
+# toolboxes/, so each tool can be downloaded on its own and added to ArcGIS Pro.
 #
-# - On every push to main, each toolbox whose folder changed gets a new release.
-#   A toolbox that has never been released gets its first one.
-# - Tags are per toolbox: survey-location-map-v1.0, survey-location-map-v1.1, ...
-#   The minor number goes up by one each release. To start a new major version,
-#   put it in a VERSION file in the toolbox folder (for example "2.0").
-# - Run it by hand from the Actions tab to re-release one toolbox (or "all").
+# - On every push to main that changes a toolbox, a new release is made with
+#   the latest zip of every toolbox. The notes say which toolboxes changed.
+# - Tags are v1.0, v1.1, v1.2, ... The minor number goes up by one each
+#   release. To start a new major version, put it in a VERSION file at the
+#   root of the repository (for example "2.0").
+# - Run it by hand from the Actions tab to make a release now.
 name: Release toolboxes
 
 on:
@@ -17,11 +17,6 @@ on:
       - "scripts/build_toolbox_zip.sh"
       - ".github/workflows/release-toolboxes.yml"
   workflow_dispatch:
-    inputs:
-      toolbox:
-        description: 'Toolbox folder name to release, or "all"'
-        required: true
-        default: all
 
 permissions:
   contents: write
@@ -38,77 +33,83 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Release changed toolboxes
+      - name: Release toolboxes
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
-          BEFORE: ${{ github.event.before }}
-          REQUESTED: ${{ github.event.inputs.toolbox }}
         run: |
           set -euo pipefail
           git fetch --tags --force
 
+          # Releases are tagged v<major>.<minor>. Older per-toolbox tags
+          # (survey-location-map-v1.0, ...) are ignored.
+          last_tag="$(git tag --list 'v[0-9]*' --sort=-v:refname | head -n1)"
+
+          toolboxes=()
+          changed=()
           for dir in toolboxes/*/; do
             name="$(basename "$dir")"
             case "$name" in _*|.*) continue ;; esac   # skip _template
-
-            slug="$(echo "$name" | tr '_ ' '--' | tr '[:upper:]' '[:lower:]')"
-            last_tag="$(git tag --list "$slug-v*" --sort=-v:refname | head -n1)"
-
-            # Decide whether this toolbox needs a release.
-            release=no
-            if [ "$EVENT" = "workflow_dispatch" ]; then
-              if [ "$REQUESTED" = "all" ] || [ "$REQUESTED" = "$name" ] || [ "$REQUESTED" = "$slug" ]; then
-                release=yes
-              fi
-            elif [ -z "$last_tag" ]; then
-              release=yes
-            elif ! git diff --quiet "$last_tag" HEAD -- "$dir"; then
-              release=yes
+            toolboxes+=("$name")
+            if [ -z "$last_tag" ] || ! git diff --quiet "$last_tag" HEAD -- "$dir"; then
+              changed+=("$name")
             fi
-            if [ "$release" = no ]; then
-              echo "$name: no changes since $last_tag"
-              continue
-            fi
+          done
 
-            # Work out the next version.
-            want=""
-            [ -f "$dir/VERSION" ] && want="$(tr -d ' \r\n' < "$dir/VERSION")"
-            if [ -z "$last_tag" ]; then
-              version="${want:-1.0}"
-            else
-              last="${last_tag#"$slug-v"}"
-              major="${last%%.*}"; minor="${last#*.}"; minor="${minor%%.*}"
-              version="$major.$((minor + 1))"
-              if [ -n "$want" ]; then
-                want_major="${want%%.*}"
-                if [ "$want_major" -gt "$major" ]; then version="$want"; fi
-              fi
-            fi
-            tag="$slug-v$version"
+          if [ "${#changed[@]}" -eq 0 ] && [ "$EVENT" != "workflow_dispatch" ]; then
+            echo "No toolbox changed since $last_tag"
+            exit 0
+          fi
 
-            # Notes: the commits that touched this toolbox since the last release.
-            title="$(sed -n 's/^# *//p;q' "$dir/README.md" 2>/dev/null || true)"
-            [ -n "$title" ] || title="$name"
+          # Work out the next version.
+          want=""
+          [ -f VERSION ] && want="$(tr -d ' \r\n' < VERSION)"
+          if [ -z "$last_tag" ]; then
+            version="${want:-1.0}"
+          else
+            last="${last_tag#v}"
+            major="${last%%.*}"; minor="${last#*.}"; minor="${minor%%.*}"
+            version="$major.$((minor + 1))"
+            if [ -n "$want" ] && [ "${want%%.*}" -gt "$major" ]; then
+              version="$want"
+            fi
+          fi
+          tag="v$version"
+
+          rm -rf dist && mkdir -p dist
+          {
+            echo "Download the zip for the toolbox you want under **Assets**, unzip it and add the \`.pyt\` inside to ArcGIS Pro (Catalog > Toolboxes > Add Toolbox)."
+            echo "If an older copy is already added, remove it or unzip over it, then right-click the toolbox and choose Refresh."
+            echo
+            echo "| Zip | Toolbox |"
+            echo "| --- | ------- |"
+          } > notes.md
+
+          for name in "${toolboxes[@]}"; do
+            scripts/build_toolbox_zip.sh "$name" "dist/${name}.zip"
+            title="$(sed -n '1s/^# *//p' "toolboxes/$name/README.md" 2>/dev/null || true)"
+            echo "| ${name}.zip | ${title:-$name} |" >> notes.md
+          done
+
+          for name in "${changed[@]}"; do
+            title="$(sed -n '1s/^# *//p' "toolboxes/$name/README.md" 2>/dev/null || true)"
             {
-              echo "Download **${name}.zip** below, unzip it and add the \`.pyt\` inside to ArcGIS Pro (Catalog > Toolboxes > Add Toolbox)."
-              echo "If an older copy is already added, remove it or unzip over it, then right-click the toolbox and choose Refresh."
               echo
-              echo "### Changes"
+              echo "### ${title:-$name}"
               if [ -n "$last_tag" ]; then
-                git log --no-merges --format='- %s' "$last_tag..HEAD" -- "$dir"
+                git log --no-merges --format='- %s' "$last_tag..HEAD" -- "toolboxes/$name"
               else
                 echo "- First release."
               fi
-            } > notes.md
-
-            mkdir -p dist
-            scripts/build_toolbox_zip.sh "$name" "dist/${name}.zip"
-
-            gh release create "$tag" "dist/${name}.zip" \
-              --target "$GITHUB_SHA" \
-              --title "$title v$version" \
-              --notes-file notes.md \
-              --latest=false
-            echo "$name: released $tag"
+            } >> notes.md
           done
+          if [ "${#changed[@]}" -eq 0 ]; then
+            printf '\nNo toolbox changed since %s.\n' "$last_tag" >> notes.md
+          fi
+
+          gh release create "$tag" dist/*.zip \
+            --target "$GITHUB_SHA" \
+            --title "Arc Tools $tag" \
+            --notes-file notes.md \
+            --latest
+          echo "Released $tag"

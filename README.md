@@ -26,18 +26,17 @@ modules, sample data or notes it needs.
 
 ## Downloading a toolbox
 
-Each toolbox has its own release with a zip of just that toolbox. Open
-[Releases](https://github.com/uxyrahmed/arctools/releases), find the newest
-release for the toolbox you want (for example `survey-location-map-v1.0`) and
-download the zip under **Assets**. Unzip it anywhere and add the `.pyt` inside
-(see below).
+Open the [latest release](https://github.com/uxyrahmed/arctools/releases/latest)
+and download the zip for the toolbox you want under **Assets** (for example
+`survey_location_map.zip` or `pictorial_maps.zip`). Unzip it anywhere and add
+the `.pyt` inside (see below).
 
 Releases are made automatically: every time a change to a toolbox lands on
-`main`, that toolbox gets a new release (v1.0, v1.1, v1.2, ...) listing what
-changed. Toolboxes that didn't change keep their last release. To re-release
-a toolbox by hand, run **Release toolboxes** from the Actions tab. To jump to a
-new major version, put it in a `VERSION` file in the toolbox folder (for
-example `2.0`).
+`main`, a new release (v1.0, v1.1, v1.2, ...) is published with a fresh zip of
+every toolbox, and its notes list what changed in each one. To make a release
+by hand, run **Release toolboxes** from the Actions tab. To jump to a new major
+version, put it in a `VERSION` file at the root of the repository (for example
+`2.0`).
 
 ## Using a toolbox in ArcGIS Pro
 
