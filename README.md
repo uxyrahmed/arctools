@@ -8,6 +8,7 @@ A collection of toolboxes and tools for ArcGIS Pro.
 arctools/
 ├── toolboxes/        # Toolboxes you can add to an ArcGIS Pro project
 │   ├── _template/    # Starter Python toolbox (.pyt) to copy for new tools
+│   ├── currents_map/    # Currents Map toolbox (currents CSV to arrows on a map)
 │   ├── pictorial_maps/  # Pictorial Maps toolbox (photo callouts)
 │   └── survey_location_map/  # Survey Location Map toolbox (survey KMZ to map layout)
 ├── scripts/          # Standalone arcpy scripts, and the script that zips a toolbox for a release
@@ -65,5 +66,6 @@ your clone of this repository instead.
 
 | Toolbox | Description |
 | ------- | ----------- |
+| [Currents Map](toolboxes/currents_map/) | Turns the field device's currents CSV into a currents map. **Draw Current Arrows** works out each current's speed and direction from its start and end point and draws an arrow labelled like `0.21 m/s S`; **Add Currents to Map** shows the arrows on a map and zooms to them. **Make Currents Map** runs both. See the [toolbox README](toolboxes/currents_map/README.md). |
 | [Pictorial Maps](toolboxes/pictorial_maps/) | Shows geotagged photos on the map, each joined to where it was taken by a leader line that stays attached when the photo is moved. **Create Photo Callouts** makes the callouts from the output of Geotagged Photos To Points, with a Picture Shape option (Original, 3:4 or 4:3) and the callouts kept out of layout legends. **Style Photo Callouts** redraws the pictures, for example at a new size. See the [toolbox README](toolboxes/pictorial_maps/README.md) for the workflow and every parameter. |
 | [Survey Location Map](toolboxes/survey_location_map/) | Turns a survey KMZ into a Survey Location Map. **Import Survey KMZ** splits the survey points into one feature class per survey with Name, X and Y; **Draw Transect Lines** draws a 50 m line from each transect point in the direction in its name; **Connect Data to Layout** and **Restyle Layout** point the master layout at the new data, hide the surveys that aren't there and stack the tables to fit. **Make Survey Map** runs all four. See the [toolbox README](toolboxes/survey_location_map/README.md) for the workflow and the names the master layout needs. |
