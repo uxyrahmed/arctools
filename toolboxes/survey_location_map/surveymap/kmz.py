@@ -17,6 +17,12 @@ _REDRAWN_BY = {
     surveys.CURRENT_ARROWS: " Step 3 draws them again from the currents CSV.",
 }
 
+# What the other steps do with the lines Step 1 writes.
+_KEPT_BY = {
+    surveys.TRANSECT_LINES: " Step 2 keeps them, and only draws lines for transect "
+    "points that don't have one.",
+}
+
 
 def geodatabase_path(folder, name):
     name = str(name).strip()
@@ -83,15 +89,17 @@ def import_kmz(kmz_path, out_folder, gdb_name, coordinate_system=None):
                 failed.append(survey.feature_class)
                 continue
             kind = "point" if survey.is_point else "line"
+            kept = _KEPT_BY.get(survey.code)
             arcpy.AddMessage(
                 f"  {survey.layer_name}: {surveys.plural(len(features), kind)} -> "
-                f"{survey.feature_class}"
+                f"{survey.feature_class}" + (f".{kept}" if kept else "")
             )
             written[survey.code] = len(features)
         elif arcpy.Exists(path) and gis.clear_features(path):
             # Left from an earlier run, so it doesn't match this KMZ.
             note = _REDRAWN_BY.get(survey.code, "")
             arcpy.AddMessage(f"  Cleared {survey.feature_class}, left from an earlier run.{note}")
+    _save_kmz_transect_lines(gdb, source_sr, groups.get(surveys.TRANSECT_LINES))
 
     for prefix in sorted(unknown):
         fc_name = surveys.unknown_feature_class(prefix)
@@ -129,6 +137,21 @@ def import_kmz(kmz_path, out_folder, gdb_name, coordinate_system=None):
         arcpy.AddMessage(f"Left out features that aren't survey data: {counts}.{note}")
     arcpy.AddMessage(f"X and Y are in {gis.describe_spatial_reference(xy_sr)}.")
     return gdb, written
+
+
+def _save_kmz_transect_lines(gdb, spatial_reference, features):
+    """Save a copy of the KMZ's transect lines, so Step 2 knows which lines
+    to keep when it draws the missing ones. When this KMZ has none, the copy
+    left from an earlier run is cleared."""
+    path = os.path.join(gdb, surveys.TRANSECT_LINES_FROM_KMZ)
+    if features:
+        with gis.carry_on(
+            f"save a copy of the transect lines in {surveys.TRANSECT_LINES_FROM_KMZ}",
+            so="Step 2 will draw a line from every transect point",
+        ):
+            gis.write_features(path, surveys.POLYLINE, spatial_reference, features)
+    elif arcpy.Exists(path):
+        gis.clear_features(path)
 
 
 def _read_kmz(kmz_path):

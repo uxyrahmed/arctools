@@ -6,6 +6,7 @@ To add a survey, add a line to SURVEYS and the matching layer, table and
 heading to the master layout (see README.md). No arcpy here.
 """
 
+import math
 import os
 import re
 from collections import namedtuple
@@ -51,7 +52,7 @@ SURVEYS = (
     Survey("VSS", "Visual Snorkeling Survey Points", POINT, ("VSS",), "VSS_Points"),
     Survey("VSS_LINES", "Visual Snorkeling Survey Lines", POLYLINE, ("VSS",), "VSS_Lines"),
     Survey("T", "Marine Transects", POINT, ("T",), "T_Points"),
-    Survey("T_LINES", "Transect Line", POLYLINE, (), "T_Lines"),
+    Survey("T_LINES", "Transect Line", POLYLINE, ("T",), "T_Lines"),
     Survey("BP", "Beach Profiles", POINT, ("BP", "P"), "BP_Points"),
     Survey("GW", "Ground Water Sampling Points", POINT, ("GW",), "GW_Points"),
     Survey("C", "Currents Survey Points", POINT, ("C",), "C_Points"),
@@ -59,9 +60,16 @@ SURVEYS = (
     Survey("N", "Noise Survey Points", POINT, ("N",), "N_Points"),
 )
 
-# Transect points, and the lines drawn from them.
+# Transect points, and their lines. Lines in the KMZ are kept (Step 1 also
+# saves a copy of them in TRANSECT_LINES_FROM_KMZ), and Step 2 draws a line
+# only for the transect points that don't have one there.
 TRANSECT_POINTS = "T"
 TRANSECT_LINES = "T_LINES"
+TRANSECT_LINES_FROM_KMZ = "T_Lines_KMZ"
+
+# A transect point already has a line from the KMZ when a line has the same
+# ID ('T201 S 2m' and 'T201'), or starts or ends within this many metres of it.
+TRANSECT_MATCH_M = 10.0
 
 # Current points, and the arrows drawn from a currents CSV. When there are
 # arrows, they're shown on the map instead of the points; the points still
@@ -127,6 +135,7 @@ GROUP_GAP_PT = 14.0
 MIN_GAP_PT = 4.0
 
 _PREFIX = re.compile(r"\s*([A-Za-z]+)")
+_ID = re.compile(r"\s*([A-Za-z]+)\s*(\d+)")
 
 
 def name_prefix(name):
@@ -138,6 +147,37 @@ def name_prefix(name):
         return ""
     match = _PREFIX.match(str(name))
     return match.group(1).upper() if match else ""
+
+
+def feature_id(name):
+    """The letters and number a feature name starts with, in capitals and
+    without leading zeros, so a transect's point and line match.
+
+    'T201 S 2m' -> 'T201', 't 201 line' -> 'T201', 'T01' -> 'T1', 'jetty' -> None.
+    """
+    match = _ID.match(str(name or ""))
+    if not match:
+        return None
+    return match.group(1).upper() + str(int(match.group(2)))
+
+
+def points_with_lines(points, lines, near):
+    """Indexes of the points that already have one of lines: a line with the
+    same ID ('T201 S 2m' and 'T201'), or one that starts or ends within near
+    of the point.
+
+    points are (name, (x, y)) and lines (name, [(x, y), ...]), all in the same
+    projected units as near.
+    """
+    ids = {feature_id(name) for name, _ in lines} - {None}
+    ends = [vertices[index] for _, vertices in lines if vertices for index in (0, -1)]
+    found = set()
+    for index, (name, (x, y)) in enumerate(points):
+        if feature_id(name) in ids or any(
+            math.hypot(x - end_x, y - end_y) <= near for end_x, end_y in ends
+        ):
+            found.add(index)
+    return found
 
 
 def survey_for(name, geometry):

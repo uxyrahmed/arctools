@@ -9,7 +9,7 @@ KMZ. You add the drone image and fill in the title block.
 | ---- | ------------ |
 | **Make Survey Map (All in One)** | Runs Steps 1 to 5 in order, from just the KMZ and the layout, plus the currents CSV if you want current arrows. |
 | **Step 1 Import Survey KMZ** | Converts the KMZ and splits its features into one feature class per survey by name prefix. Points keep Name, X and Y; lines keep Name. Everything else in the KMZ is left out. |
-| **Step 2 Draw Transect Lines** | Draws a 50 m line from each transect point, in the compass direction in its name. |
+| **Step 2 Draw Transect Lines** | Keeps the transect lines that are already in the KMZ, and draws a 50 m line from each transect point that doesn't have one, in the compass direction in its name. |
 | **Step 3 Draw Current Arrows** | Works out each current's speed and direction from the currents CSV and draws an arrow from its start to its end, labelled like `0.21 m/s S`. |
 | **Step 4 Connect Data to Layout** | Points each survey layer in the master layout at its new data, links each survey's table to its layer and labels the points. Current arrows replace the current points on the map. |
 | **Step 5 Restyle Layout** | Hides the surveys that aren't in the KMZ, sizes each table to its rows and stacks the tables in the Tables Panel. |
@@ -43,7 +43,7 @@ current point.
 | Visual snorkeling survey | VSS | `VSS_Points` | Visual Snorkeling Survey Points | VSS Table | VSS Heading |
 | Visual snorkeling survey lines | VSS (lines) | `VSS_Lines` | Visual Snorkeling Survey Lines | | |
 | Marine transects | T | `T_Points` | Marine Transects | T Table | T Heading |
-| Transect lines | drawn by Step 2 | `T_Lines` | Transect Line | | |
+| Transect lines | T (lines), and drawn by Step 2 | `T_Lines` | Transect Line | | |
 | Beach profiles | P or BP | `BP_Points` | Beach Profiles | BP Table | BP Heading |
 | Ground water sampling | GW | `GW_Points` | Ground Water Sampling Points | GW Table | GW Heading |
 | Currents | C | `C_Points` | Currents Survey Points | C Table | C Heading |
@@ -53,6 +53,8 @@ current point.
 - VSS lines (lines whose names start with VSS) go on the map with the VSS
   points. When the KMZ has none, the Visual Snorkeling Survey Lines layer
   and its legend entry are hidden, so only the points show.
+- Transect lines (lines whose names start with T, like `T201`) are kept;
+  see [Transect lines](#transect-lines).
 - Other lines and all polygons (building outlines, bathymetry and so on)
   are left out, and Step 1 says how many.
 - Points whose prefix isn't in the table are saved as `<PREFIX>_Points`, with
@@ -66,12 +68,19 @@ Transect names hold the ID, the direction and usually the depth, for example
 `T201 S 2m`. Step 2 draws a line from each point in that direction: south for
 `T201 S 2m`.
 
+Transect lines that are already in the KMZ are kept as they are, and their
+points don't get a second line. A line in the KMZ is a transect line when its
+name starts with T, like `T201` or `T201 line`. It belongs to the point with
+the same ID (`T201 S 2m`), or to any transect point it starts or ends within
+10 m of. Step 1 keeps a copy of these lines in `T_Lines_KMZ`, so Step 2 knows
+which ones to keep each time it runs.
+
 - All 16 compass points work: N, NNE, NE, ENE, E, ESE, SE, SSE, S, SSW, SW,
   WSW, W, WNW, NW and NNW, in any case. So do words (`South`, `North East`,
   `north-west`) and a direction run into the depth (`S2m`, `NE3.5m`).
 - The first word is the transect's ID, so it's never read as a direction.
-- A point with no direction in its name gets no line, and Step 2 lists those
-  points.
+- A point with no direction in its name, and no line in the KMZ, gets no
+  line, and Step 2 lists those points.
 - Lines are worked out in metres in UTM (or the coordinate system you choose),
   so each is exactly the length you set.
 
@@ -143,13 +152,17 @@ shows as 281308.00. The features themselves stay in WGS 1984, like the KMZ.
   rather than replaced, so running again works while the layout shows them.
   Ones the new KMZ doesn't have are emptied, including `T_Lines` and
   `C_Arrows`, which Steps 2 and 3 draw again.
+- Transect lines in the KMZ go to `T_Lines`, and a copy to `T_Lines_KMZ`
+  for Step 2.
 
 ### Step 2 Draw Transect Lines
 
 - **Transect Points:** `T_Points` from Step 1, or any point layer with a Name
   field. With a selection, only the selected points get lines.
 - **Output Transect Lines:** defaults to `T_Lines` next to the points. It's
-  replaced on every run.
+  replaced on every run, with the KMZ's transect lines (from `T_Lines_KMZ`
+  next to the points) and the lines drawn for the points that don't have
+  one.
 - **Transect Line Length (metres):** 50 unless you change it.
 - **Coordinate System to Draw In:** optional, a projected coordinate system
   to work the lines out in. Leave it blank for UTM 43N or 43S.

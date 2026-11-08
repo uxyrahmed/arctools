@@ -355,6 +355,13 @@ class MakeSurveyMap:
                 )
             elif lines:
                 present[surveys.TRANSECT_LINES] = lines
+            else:
+                present.pop(surveys.TRANSECT_LINES, None)
+        elif surveys.TRANSECT_LINES in present:
+            arcpy.AddMessage(
+                "No transect points to draw lines from, so the map shows the "
+                "transect lines from the KMZ."
+            )
         else:
             arcpy.AddMessage("No transect points to draw lines from.")
 
@@ -449,8 +456,9 @@ class DrawTransectLines:
         self.label = "Step 2 Draw Transect Lines"
         self.description = (
             "Draws a line from each transect point in the compass direction in "
-            "its name, for example 'T201 S 2m' goes south. Points with no "
-            "direction in their name get no line.")
+            "its name, for example 'T201 S 2m' goes south. Transect lines that "
+            "were already in the KMZ are kept, and their points get no second "
+            "line. Points with no direction in their name get no line.")
         self.category = None
 
     def getParameterInfo(self):
