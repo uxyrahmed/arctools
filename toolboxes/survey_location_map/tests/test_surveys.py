@@ -189,6 +189,47 @@ class SurveyForTests(unittest.TestCase):
 
     def test_unknown_geometry(self):
         self.assertIsNone(surveys.survey_for("SW1", "POLYGON"))
+        self.assertIsNone(surveys.survey_for("1", "POLYGON", "VSS"))
+
+    def test_lines_named_by_their_folder(self):
+        # From SURVEYED - Vilureef Add 2 - 10 2026.kmz: the VSS lines are
+        # named 1 to 5 and sit in a folder named VSS.
+        for name in ("1", "5", "", "Line 2", "Track 1", "SW1"):
+            with self.subTest(name=name):
+                self.assertEqual(surveys.survey_for(name, POLYLINE, "VSS").code, "VSS_LINES")
+        self.assertEqual(surveys.survey_for("3", POLYLINE, "vss lines").code, "VSS_LINES")
+        self.assertEqual(surveys.survey_for("3", POLYLINE, "T").code, "T_LINES")
+
+    def test_line_names_come_before_folders(self):
+        self.assertEqual(surveys.survey_for("T1", POLYLINE, "VSS").code, "T_LINES")
+        self.assertEqual(surveys.survey_for("VSS2", POLYLINE, "Transects").code, "VSS_LINES")
+
+    def test_other_folders_leave_lines_out(self):
+        for folder in ("works", "Addendum 2 - 10 2026", "Transects", "SW (probe+500mlPET)",
+                       "currents", "Survey.kmz", "", None):
+            with self.subTest(folder=folder):
+                self.assertIsNone(surveys.survey_for("1", POLYLINE, folder))
+
+    def test_points_go_by_their_own_names(self):
+        self.assertIsNone(surveys.survey_for("1", POINT, "VSS"))
+        self.assertEqual(surveys.survey_for("VSS301", POINT, "Transects").code, "VSS")
+
+    def test_folder_name(self):
+        cases = {
+            "SURVEYED - Vilureef Add 2 - 10 2026.kmz/SURVEYED - Vilureef Add 2 - 10 2026/VSS":
+                "VSS",
+            "/SURVEYED - Vilureef/SW (probe+500mlPET)": "SW (probe+500mlPET)",
+            "Survey.kmz\\Survey\\Transects": "Transects",
+            "Survey.kmz/Survey/VSS/": "VSS",
+            " Survey.kmz / VSS lines ": "VSS lines",
+            "Survey.kmz": "Survey.kmz",
+            "": None,
+            "/": None,
+            None: None,
+        }
+        for path, expected in cases.items():
+            with self.subTest(path=path):
+                self.assertEqual(surveys.folder_name(path), expected)
 
 
 class TransectLineTests(unittest.TestCase):
