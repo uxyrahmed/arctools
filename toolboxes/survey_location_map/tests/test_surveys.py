@@ -77,8 +77,11 @@ class SurveyTableTests(unittest.TestCase):
         self.assertEqual(surveys.by_code(surveys.TRANSECT_POINTS).geometry, POINT)
         transect_lines = surveys.by_code(surveys.TRANSECT_LINES)
         self.assertEqual(transect_lines.geometry, POLYLINE)
-        # The tools draw these lines, so no KMZ feature goes into them.
-        self.assertEqual(transect_lines.prefixes, ())
+        # Transect lines in the KMZ are named like the points, and are kept.
+        self.assertEqual(transect_lines.prefixes, ("T",))
+        self.assertNotIn(
+            surveys.TRANSECT_LINES_FROM_KMZ, [s.feature_class for s in surveys.SURVEYS]
+        )
 
     def test_by_code_unknown(self):
         with self.assertRaises(KeyError):
@@ -176,13 +179,48 @@ class SurveyForTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIsNone(surveys.survey_for(name, POINT))
 
-    def test_only_vss_lines_come_from_the_kmz(self):
-        for name in ("T201 S 2m", "SW1", "P1", "C201 start", "jetty 4"):
+    def test_vss_and_transect_lines_come_from_the_kmz(self):
+        self.assertEqual(surveys.survey_for("VSS1", POLYLINE).code, "VSS_LINES")
+        self.assertEqual(surveys.survey_for("T201 S 2m", POLYLINE).code, "T_LINES")
+        self.assertEqual(surveys.survey_for("t3", POLYLINE).code, "T_LINES")
+        for name in ("SW1", "P1", "C201 start", "jetty 4", "Track 1", "Transect 1"):
             with self.subTest(name=name):
                 self.assertIsNone(surveys.survey_for(name, POLYLINE))
 
     def test_unknown_geometry(self):
         self.assertIsNone(surveys.survey_for("SW1", "POLYGON"))
+
+
+class TransectLineTests(unittest.TestCase):
+    def test_feature_id(self):
+        cases = {
+            "T201 S 2m": "T201", "t 201 line": "T201", "T01": "T1", "T0": "T0",
+            "T1-line": "T1", "VSS01": "VSS1", "jetty": None, "12": None, "": None,
+            None: None,
+        }
+        for name, expected in cases.items():
+            with self.subTest(name=name):
+                self.assertEqual(surveys.feature_id(name), expected)
+
+    def test_points_with_lines_by_id(self):
+        points = [("T1 2m N", (0, 0)), ("T2 3.5m NW", (500, 0)), ("T03 3.5m N", (900, 0))]
+        lines = [("T1", [(300, 300), (300, 350)]), ("T3 line", [(-500, -500), (-500, -450)])]
+        self.assertEqual(surveys.points_with_lines(points, lines, 10), {0, 2})
+
+    def test_points_with_lines_by_place(self):
+        points = [("T1 2m N", (0, 0)), ("T2 3.5m NW", (500, 0)), ("T3 3.5m N", (900, 0))]
+        # Named differently, but one starts 6 m from T1 and one ends 8 m from T3.
+        lines = [("T7", [(6, 0), (6, 50)]), ("T8", [(900, 60), (900, 8)])]
+        self.assertEqual(surveys.points_with_lines(points, lines, 10), {0, 2})
+
+    def test_points_far_from_lines_have_none(self):
+        points = [("T1 2m N", (0, 0))]
+        # The middle of this line passes the point, but neither end is near it.
+        lines = [("T5", [(-100, 1), (100, 1)])]
+        self.assertEqual(surveys.points_with_lines(points, lines, 10), set())
+
+    def test_no_lines(self):
+        self.assertEqual(surveys.points_with_lines([("T1 N", (0, 0))], [], 10), set())
 
 
 class HelperTests(unittest.TestCase):
