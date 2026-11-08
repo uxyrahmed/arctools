@@ -55,6 +55,10 @@ current point.
   and its legend entry are hidden, so only the points show.
 - Transect lines (lines whose names start with T, like `T201`) are kept;
   see [Transect lines](#transect-lines).
+- A line whose name doesn't start with VSS or T goes by the name of the KMZ
+  folder it's in, the same way: lines named `1` to `5` in a folder named
+  `VSS` are VSS lines. A line's own name comes first, so a line named `T1` in
+  that folder is still a transect line. Points always go by their own names.
 - Other lines and all polygons (building outlines, bathymetry and so on)
   are left out, and Step 1 says how many.
 - Points whose prefix isn't in the table are saved as `<PREFIX>_Points`, with

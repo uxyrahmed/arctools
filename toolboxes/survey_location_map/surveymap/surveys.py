@@ -180,14 +180,35 @@ def points_with_lines(points, lines, near):
     return found
 
 
-def survey_for(name, geometry):
-    """The survey a KMZ feature belongs to, from its name and geometry, or None."""
-    prefix = name_prefix(name)
-    if not prefix:
-        return None
-    for survey in SURVEYS:
-        if survey.geometry == geometry and prefix in survey.prefixes:
-            return survey
+def folder_name(folder_path):
+    """The name of the innermost KMZ folder in a FolderPath from KML To Layer,
+    or None.
+
+    'Survey.kmz/Survey/VSS' -> 'VSS', '/Survey/SW (probe)' -> 'SW (probe)'.
+    """
+    parts = [part.strip() for part in re.split(r"[/\\]", str(folder_path or ""))]
+    parts = [part for part in parts if part]
+    return parts[-1] if parts else None
+
+
+def survey_for(name, geometry, folder=None):
+    """The survey a KMZ feature belongs to, from its name and geometry, or None.
+
+    A line whose name doesn't mark a line survey goes with the line survey the
+    name of its KMZ folder starts with, so lines named '1' to '5' in a folder
+    named 'VSS' are VSS lines. Points always go by their own names.
+    """
+    survey = _survey_with_prefix(name_prefix(name), geometry)
+    if survey is None and geometry == POLYLINE:
+        survey = _survey_with_prefix(name_prefix(folder), geometry)
+    return survey
+
+
+def _survey_with_prefix(prefix, geometry):
+    if prefix:
+        for survey in SURVEYS:
+            if survey.geometry == geometry and prefix in survey.prefixes:
+                return survey
     return None
 
 

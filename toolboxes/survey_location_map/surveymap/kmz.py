@@ -133,7 +133,10 @@ def import_kmz(kmz_path, out_folder, gdb_name, coordinate_system=None):
         note = ""
         if skipped.get("line"):
             prefixes = [p for s in surveys.SURVEYS if not s.is_point for p in s.prefixes]
-            note = f" Lines only go on the map when their names start with {' or '.join(prefixes)}."
+            note = (
+                " Lines only go on the map when their name, or the name of the KMZ "
+                f"folder they're in, starts with {' or '.join(prefixes)}."
+            )
         arcpy.AddMessage(f"Left out features that aren't survey data: {counts}.{note}")
     arcpy.AddMessage(f"X and Y are in {gis.describe_spatial_reference(xy_sr)}.")
     return gdb, written
@@ -200,11 +203,11 @@ def _sort_features(raw_gdb):
                 continue
             shape_type, spatial_reference, features = read
             geometry_type = _GEOMETRIES.get(shape_type)
-            for feature_name, geometry in features:
+            for feature_name, folder, geometry in features:
                 if geometry_type is None:
                     skipped[_noun(shape_type)] += 1
                     continue
-                survey = surveys.survey_for(feature_name, geometry_type)
+                survey = surveys.survey_for(feature_name, geometry_type, folder)
                 if survey is not None:
                     groups[survey.code].append((feature_name, geometry))
                 elif geometry_type == surveys.POINT:
@@ -222,23 +225,24 @@ def _sort_features(raw_gdb):
 
 
 def _read_features(path):
-    """(shape type, spatial reference, [(name, geometry)]) for one feature class.
-    Everything is read before returning, so nothing keeps it open."""
+    """(shape type, spatial reference, [(name, folder, geometry)]) for one
+    feature class, where folder is the name of the KMZ folder the feature is
+    in, or None. Everything is read before returning, so nothing keeps it open."""
     description = arcpy.Describe(path)
     shape_type, spatial_reference = description.shapeType, description.spatialReference
-    name_field = _name_field(path)
-    with arcpy.da.SearchCursor(path, [name_field, "SHAPE@"]) as rows:
-        features = [
-            ((name or "").strip(), geometry) for name, geometry in rows if geometry is not None
-        ]
+    fields = {field.name.lower(): field.name for field in arcpy.ListFields(path)}
+    if "name" not in fields:
+        raise surveys.SurveyMapError(f"The KMZ layer {os.path.basename(path)} has no Name field.")
+    # KML To Layer writes the folder each feature was in to FolderPath.
+    folder_field = fields.get("folderpath")
+    columns = [fields["name"], "SHAPE@"] + ([folder_field] if folder_field else [])
+    features = []
+    with arcpy.da.SearchCursor(path, columns) as rows:
+        for row in rows:
+            if row[1] is not None:
+                folder = surveys.folder_name(row[2]) if folder_field else None
+                features.append(((row[0] or "").strip(), folder, row[1]))
     return shape_type, spatial_reference, features
-
-
-def _name_field(path):
-    for field in arcpy.ListFields(path):
-        if field.name.lower() == "name":
-            return field.name
-    raise surveys.SurveyMapError(f"The KMZ layer {os.path.basename(path)} has no Name field.")
 
 
 def _noun(shape_type):
